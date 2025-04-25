@@ -1,20 +1,29 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <time.h>
 
-#define INPUT_NODES 784  // 28*28 pixels
-#define HIDDEN_NODES 256 // Number of hidden nodes
-#define OUTPUT_NODES 10  // 10 digits (0-9)
-#define NUM_TRAINING_IMAGES 60000
-#define NUM_TEST_IMAGES 10000
-#define NUMBER_OF_EPOCHS 10
+// 超参数
+#define INPUT_NODES 784
+#define HIDDEN_NODES 256
+#define OUTPUT_NODES 10
+#define MAX_PATH 256
+#define DEFAULT_TRAIN_IMAGES "mnist_train_images.bin"
+#define DEFAULT_TRAIN_LABELS "mnist_train_labels.bin"
+#define DEFAULT_TEST_IMAGES "mnist_test_images.bin"
+#define DEFAULT_TEST_LABELS "mnist_test_labels.bin"
+#define DEFAULT_MODEL "model.bin"
 
-// 数据集全局变量
-double training_images[NUM_TRAINING_IMAGES][INPUT_NODES];
-double training_labels[NUM_TRAINING_IMAGES][OUTPUT_NODES];
-double test_images[NUM_TEST_IMAGES][INPUT_NODES];
-double test_labels[NUM_TEST_IMAGES][OUTPUT_NODES];
+// 为了灵活，最大只分配空间，实际数据量可自定义（下同）
+#define MAX_TRAIN 60000
+#define MAX_TEST 10000
+
+// 数据全局变量
+double training_images[MAX_TRAIN][INPUT_NODES];
+double training_labels[MAX_TRAIN][OUTPUT_NODES];
+double test_images[MAX_TEST][INPUT_NODES];
+double test_labels[MAX_TEST][OUTPUT_NODES];
 
 // 权重和偏置
 double weight1[INPUT_NODES][HIDDEN_NODES];
@@ -22,18 +31,13 @@ double weight2[HIDDEN_NODES][OUTPUT_NODES];
 double bias1[HIDDEN_NODES];
 double bias2[OUTPUT_NODES];
 
-// 正确预测数
 int correct_predictions;
 int forward_prob_output;
 
-// ReLU激活
+// ReLU及其导数
 double relu(double x) { return x > 0 ? x : 0; }
 double relu_derivative(double x) { return x > 0 ? 1 : 0; }
-
-// Sigmoid激活（用于输出层）
 double sigmoid(double x) { return 1.0 / (1.0 + exp(-x)); }
-
-// 取最大值索引
 int max_index(double arr[], int size)
 {
     int max_i = 0;
@@ -45,70 +49,68 @@ int max_index(double arr[], int size)
     return max_i;
 }
 
-// 加载MNIST数据集
-void load_mnist()
+// 读取一行字符串到buffer，并去除末尾换行
+void input_string(const char *prompt, char *buf, int maxlen, const char *default_val)
 {
-    FILE *training_images_file = fopen("mnist_train_images.bin", "rb");
-    FILE *training_labels_file = fopen("mnist_train_labels.bin", "rb");
-    FILE *test_images_file = fopen("mnist_test_images.bin", "rb");
-    FILE *test_labels_file = fopen("mnist_test_labels.bin", "rb");
-    if (!training_images_file || !training_labels_file || !test_images_file || !test_labels_file)
-    {
-        printf("Error opening dataset files\n");
-        exit(1);
-    }
-    // 跳过MNIST官方文件头
-    fseek(training_images_file, 16, SEEK_SET);
-    fseek(training_labels_file, 8, SEEK_SET);
-    fseek(test_images_file, 16, SEEK_SET);
-    fseek(test_labels_file, 8, SEEK_SET);
-
-    // 读取训练集
-    for (int i = 0; i < NUM_TRAINING_IMAGES; i++)
-    {
-        for (int j = 0; j < INPUT_NODES; j++)
-        {
-            unsigned char pixel;
-            fread(&pixel, sizeof(unsigned char), 1, training_images_file);
-            training_images[i][j] = (double)pixel / 255.0;
-        }
-    }
-    for (int i = 0; i < NUM_TRAINING_IMAGES; i++)
-    {
-        unsigned char label;
-        fread(&label, sizeof(unsigned char), 1, training_labels_file);
-        for (int j = 0; j < OUTPUT_NODES; j++)
-        {
-            training_labels[i][j] = (j == label) ? 1.0 : 0.0;
-        }
-    }
-    // 读取测试集
-    for (int i = 0; i < NUM_TEST_IMAGES; i++)
-    {
-        for (int j = 0; j < INPUT_NODES; j++)
-        {
-            unsigned char pixel;
-            fread(&pixel, sizeof(unsigned char), 1, test_images_file);
-            test_images[i][j] = (double)pixel / 255.0;
-        }
-    }
-    for (int i = 0; i < NUM_TEST_IMAGES; i++)
-    {
-        unsigned char label;
-        fread(&label, sizeof(unsigned char), 1, test_labels_file);
-        for (int j = 0; j < OUTPUT_NODES; j++)
-        {
-            test_labels[i][j] = (j == label) ? 1.0 : 0.0;
-        }
-    }
-    fclose(training_images_file);
-    fclose(training_labels_file);
-    fclose(test_images_file);
-    fclose(test_labels_file);
+    printf("%s (default: %s): ", prompt, default_val);
+    if (fgets(buf, maxlen, stdin) == NULL)
+        buf[0] = 0;
+    int len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n')
+        buf[len - 1] = 0;
+    if (strlen(buf) == 0)
+        strncpy(buf, default_val, maxlen);
 }
 
-// 保存/加载权重与偏置
-void save_weights_biases(char *file_name)
+// 加载MNIST二进制文件
+int load_mnist_images(const char *filename, double arr[][INPUT_NODES], int max_count)
+{
+    FILE *f = fopen(filename, "rb");
+    if (!f)
+    {
+        printf("Error opening %s\n", filename);
+        exit(1);
+    }
+    fseek(f, 16, SEEK_SET);
+    int i;
+    for (i = 0; i < max_count; i++)
+    {
+        for (int j = 0; j < INPUT_NODES; j++)
+        {
+            unsigned char pixel;
+            if (fread(&pixel, sizeof(unsigned char), 1, f) != 1)
+                goto END;
+            arr[i][j] = (double)pixel / 255.0;
+        }
+    }
+END:
+    fclose(f);
+    return i; // 实际读取数量
+}
+int load_mnist_labels(const char *filename, double arr[][OUTPUT_NODES], int max_count)
+{
+    FILE *f = fopen(filename, "rb");
+    if (!f)
+    {
+        printf("Error opening %s\n", filename);
+        exit(1);
+    }
+    fseek(f, 8, SEEK_SET);
+    int i;
+    for (i = 0; i < max_count; i++)
+    {
+        unsigned char label;
+        if (fread(&label, sizeof(unsigned char), 1, f) != 1)
+            goto END;
+        for (int j = 0; j < OUTPUT_NODES; j++)
+            arr[i][j] = (j == label) ? 1.0 : 0.0;
+    }
+END:
+    fclose(f);
+    return i; // 实际读取数量
+}
+
+void save_weights_biases(const char *file_name)
 {
     FILE *file = fopen(file_name, "wb");
     if (!file)
@@ -122,7 +124,7 @@ void save_weights_biases(char *file_name)
     fwrite(bias2, sizeof(double), OUTPUT_NODES, file);
     fclose(file);
 }
-void load_weights_biases(char *file_name)
+void load_weights_biases(const char *file_name)
 {
     FILE *file = fopen(file_name, "rb");
     if (!file)
@@ -137,15 +139,12 @@ void load_weights_biases(char *file_name)
     fclose(file);
 }
 
-// 训练单张图片
-void train(double input[INPUT_NODES], double output[OUTPUT_NODES],
-           double weight1[INPUT_NODES][HIDDEN_NODES], double weight2[HIDDEN_NODES][OUTPUT_NODES],
-           double bias1[HIDDEN_NODES], double bias2[OUTPUT_NODES], int correct_label)
+void train(double input[INPUT_NODES], double output[OUTPUT_NODES], int correct_label)
 {
     double hidden[HIDDEN_NODES];
     double output_layer[OUTPUT_NODES];
 
-    // Forward
+    // 前向传播
     for (int i = 0; i < HIDDEN_NODES; i++)
     {
         double sum = bias1[i];
@@ -164,11 +163,10 @@ void train(double input[INPUT_NODES], double output[OUTPUT_NODES],
     if (index == correct_label)
         forward_prob_output++;
 
-    // Backward
+    // 反向传播
     double error[OUTPUT_NODES];
     for (int i = 0; i < OUTPUT_NODES; i++)
         error[i] = output[i] - output_layer[i];
-
     double delta2[OUTPUT_NODES];
     for (int i = 0; i < OUTPUT_NODES; i++)
         delta2[i] = error[i] * output_layer[i] * (1 - output_layer[i]);
@@ -180,7 +178,6 @@ void train(double input[INPUT_NODES], double output[OUTPUT_NODES],
             sum += delta2[j] * weight2[i][j];
         delta1[i] = sum * relu_derivative(hidden[i]);
     }
-    // 更新参数
     double learning_rate = 0.05;
     for (int i = 0; i < INPUT_NODES; i++)
         for (int j = 0; j < HIDDEN_NODES; j++)
@@ -195,10 +192,7 @@ void train(double input[INPUT_NODES], double output[OUTPUT_NODES],
         bias2[i] += learning_rate * delta2[i];
 }
 
-// 测试单张图片
-void test(double input[INPUT_NODES],
-          double weight1[INPUT_NODES][HIDDEN_NODES], double weight2[HIDDEN_NODES][OUTPUT_NODES],
-          double bias1[HIDDEN_NODES], double bias2[OUTPUT_NODES], int correct_label)
+void test(double input[INPUT_NODES], int correct_label)
 {
     double hidden[HIDDEN_NODES];
     double output_layer[OUTPUT_NODES];
@@ -217,16 +211,13 @@ void test(double input[INPUT_NODES],
         output_layer[i] = sigmoid(sum);
     }
     int index = max_index(output_layer, OUTPUT_NODES);
-    // printf("Prediction: %d\n", index); // 若不需要每张都打印可注释
     if (index == correct_label)
         correct_predictions++;
 }
 
-// 主函数
-int main()
+void init_weights()
 {
-    srand(time(NULL)); // 随机种子
-    // Xavier初始化
+    srand(time(NULL));
     double w1_limit = sqrt(6.0 / (INPUT_NODES + HIDDEN_NODES));
     double w2_limit = sqrt(6.0 / (HIDDEN_NODES + OUTPUT_NODES));
     for (int i = 0; i < INPUT_NODES; i++)
@@ -239,32 +230,150 @@ int main()
         bias1[i] = 0;
     for (int i = 0; i < OUTPUT_NODES; i++)
         bias2[i] = 0;
+}
 
-    printf("Loading MNIST data...\n");
-    load_mnist();
-    printf("Training...\n");
+// 训练模式
+void train_mode()
+{
+    char train_img_path[MAX_PATH], train_label_path[MAX_PATH];
+    char model_path[MAX_PATH], buf[32];
+    int epochs = 10;
 
-    // 训练
-    for (int epoch = 0; epoch < NUMBER_OF_EPOCHS; epoch++)
+    input_string("Enter train image file path", train_img_path, MAX_PATH, DEFAULT_TRAIN_IMAGES);
+    input_string("Enter train label file path", train_label_path, MAX_PATH, DEFAULT_TRAIN_LABELS);
+    input_string("Enter model save path", model_path, MAX_PATH, DEFAULT_MODEL);
+    printf("Enter number of epochs (default: 10): ");
+    if (fgets(buf, 32, stdin) && buf[0] != '\n')
+        epochs = atoi(buf);
+    if (epochs < 1)
+        epochs = 10;
+
+    printf("Loading train images...\n");
+    int train_count = load_mnist_images(train_img_path, training_images, MAX_TRAIN);
+    printf("Loaded %d training images\n", train_count);
+    printf("Loading train labels...\n");
+    int label_count = load_mnist_labels(train_label_path, training_labels, MAX_TRAIN);
+    if (label_count != train_count)
+    {
+        printf("Image/Label count mismatch!\n");
+        exit(1);
+    }
+    printf("Loaded %d training labels\n", label_count);
+
+    printf("Initializing weights...\n");
+    init_weights();
+
+    printf("Start Training...\n");
+    for (int epoch = 0; epoch < epochs; epoch++)
     {
         forward_prob_output = 0;
-        for (int i = 0; i < NUM_TRAINING_IMAGES; i++)
+        for (int i = 0; i < train_count; i++)
         {
             int correct_label = max_index(training_labels[i], OUTPUT_NODES);
-            train(training_images[i], training_labels[i], weight1, weight2, bias1, bias2, correct_label);
+            train(training_images[i], training_labels[i], correct_label);
         }
-        printf("Epoch %d : Training Accuracy: %.4f\n", epoch + 1, (double)forward_prob_output / NUM_TRAINING_IMAGES);
+        printf("Epoch %d : Training Accuracy: %.4f\n", epoch + 1, (double)forward_prob_output / train_count);
     }
-    save_weights_biases("model.bin");
-    printf("Model saved as model.bin\n");
+    save_weights_biases(model_path);
+    printf("Model saved to %s\n", model_path);
+}
 
-    // 测试
+// 推理/测试模式
+void infer_mode()
+{
+    char test_img_path[MAX_PATH], test_label_path[MAX_PATH];
+    char model_path[MAX_PATH];
+    input_string("Enter test image file path", test_img_path, MAX_PATH, DEFAULT_TEST_IMAGES);
+    input_string("Enter test label file path", test_label_path, MAX_PATH, DEFAULT_TEST_LABELS);
+    input_string("Enter model path", model_path, MAX_PATH, DEFAULT_MODEL);
+
+    printf("Loading test images...\n");
+    int test_count = load_mnist_images(test_img_path, test_images, MAX_TEST);
+    printf("Loaded %d test images\n", test_count);
+    printf("Loading test labels...\n");
+    int label_count = load_mnist_labels(test_label_path, test_labels, MAX_TEST);
+    if (label_count != test_count)
+    {
+        printf("Image/Label count mismatch!\n");
+        exit(1);
+    }
+    printf("Loaded %d test labels\n", label_count);
+
+    printf("Loading model...\n");
+    load_weights_biases(model_path);
+
     correct_predictions = 0;
-    for (int i = 0; i < NUM_TEST_IMAGES; i++)
+    for (int i = 0; i < test_count; i++)
     {
         int correct_label = max_index(test_labels[i], OUTPUT_NODES);
-        test(test_images[i], weight1, weight2, bias1, bias2, correct_label);
+        test(test_images[i], correct_label);
     }
-    printf("Testing Accuracy: %.4f\n", (double)correct_predictions / NUM_TEST_IMAGES);
+    printf("Testing Accuracy: %.4f\n", (double)correct_predictions / test_count);
+}
+
+// 一键训练+推理
+void classic_train_and_test()
+{
+    printf("== Classic Train + Test ==\n");
+    printf("Loading training set...\n");
+    int train_count = load_mnist_images(DEFAULT_TRAIN_IMAGES, training_images, MAX_TRAIN);
+    load_mnist_labels(DEFAULT_TRAIN_LABELS, training_labels, MAX_TRAIN);
+    printf("Loaded %d training images\n", train_count);
+
+    printf("Loading test set...\n");
+    int test_count = load_mnist_images(DEFAULT_TEST_IMAGES, test_images, MAX_TEST);
+    load_mnist_labels(DEFAULT_TEST_LABELS, test_labels, MAX_TEST);
+    printf("Loaded %d test images\n", test_count);
+
+    printf("Initializing weights...\n");
+    init_weights();
+
+    printf("Start Training...\n");
+    int epochs = 10;
+    for (int epoch = 0; epoch < epochs; epoch++)
+    {
+        forward_prob_output = 0;
+        for (int i = 0; i < train_count; i++)
+        {
+            int correct_label = max_index(training_labels[i], OUTPUT_NODES);
+            train(training_images[i], training_labels[i], correct_label);
+        }
+        printf("Epoch %d : Training Accuracy: %.4f\n", epoch + 1, (double)forward_prob_output / train_count);
+    }
+    save_weights_biases(DEFAULT_MODEL);
+    printf("Model saved to %s\n", DEFAULT_MODEL);
+
+    correct_predictions = 0;
+    for (int i = 0; i < test_count; i++)
+    {
+        int correct_label = max_index(test_labels[i], OUTPUT_NODES);
+        test(test_images[i], correct_label);
+    }
+    printf("Testing Accuracy: %.4f\n", (double)correct_predictions / test_count);
+}
+
+int main()
+{
+    printf("===== Deep Neural Network (C版) - 菜单模式 =====\n");
+    printf("1. 训练（自定义参数和路径）\n");
+    printf("2. 推理/测试（自定义模型和测试集路径）\n");
+    printf("3. 经典一键训练+推理（默认路径） [默认选项]\n");
+    printf("请选择 (1/2/3, 回车默认3): ");
+
+    char choice[8];
+    if (fgets(choice, 8, stdin) == NULL || choice[0] == '\n')
+        choice[0] = '3';
+    if (choice[0] == '1')
+    {
+        train_mode();
+    }
+    else if (choice[0] == '2')
+    {
+        infer_mode();
+    }
+    else
+    {
+        classic_train_and_test();
+    }
     return 0;
 }
