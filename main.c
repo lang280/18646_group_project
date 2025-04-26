@@ -3,6 +3,8 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "logging.h"
+#include "forward.h"
 
 // 超参数
 #define INPUT_NODES 784
@@ -34,10 +36,11 @@ double bias2[OUTPUT_NODES];
 int correct_predictions;
 int forward_prob_output;
 
-// ReLU及其导数
-double relu(double x) { return x > 0 ? x : 0; }
+// 这些实现已经在forward.c中定义
+double relu(double x);
 double relu_derivative(double x) { return x > 0 ? 1 : 0; }
-double sigmoid(double x) { return 1.0 / (1.0 + exp(-x)); }
+double sigmoid(double x);
+
 int max_index(double arr[], int size)
 {
     int max_i = 0;
@@ -144,21 +147,9 @@ void train(double input[INPUT_NODES], double output[OUTPUT_NODES], int correct_l
     double hidden[HIDDEN_NODES];
     double output_layer[OUTPUT_NODES];
 
-    // 前向传播
-    for (int i = 0; i < HIDDEN_NODES; i++)
-    {
-        double sum = bias1[i];
-        for (int j = 0; j < INPUT_NODES; j++)
-            sum += input[j] * weight1[j][i];
-        hidden[i] = relu(sum);
-    }
-    for (int i = 0; i < OUTPUT_NODES; i++)
-    {
-        double sum = bias2[i];
-        for (int j = 0; j < HIDDEN_NODES; j++)
-            sum += hidden[j] * weight2[j][i];
-        output_layer[i] = sigmoid(sum);
-    }
+    // 前向传播 - 使用优化的并行版本
+    forward_propagate(input, weight1, weight2, bias1, bias2, hidden, output_layer, 0);
+    
     int index = max_index(output_layer, OUTPUT_NODES);
     if (index == correct_label)
         forward_prob_output++;
@@ -196,20 +187,10 @@ void test(double input[INPUT_NODES], int correct_label)
 {
     double hidden[HIDDEN_NODES];
     double output_layer[OUTPUT_NODES];
-    for (int i = 0; i < HIDDEN_NODES; i++)
-    {
-        double sum = bias1[i];
-        for (int j = 0; j < INPUT_NODES; j++)
-            sum += input[j] * weight1[j][i];
-        hidden[i] = relu(sum);
-    }
-    for (int i = 0; i < OUTPUT_NODES; i++)
-    {
-        double sum = bias2[i];
-        for (int j = 0; j < HIDDEN_NODES; j++)
-            sum += hidden[j] * weight2[j][i];
-        output_layer[i] = sigmoid(sum);
-    }
+    
+    // 前向传播 - 使用优化的并行版本
+    forward_propagate(input, weight1, weight2, bias1, bias2, hidden, output_layer, 0);
+    
     int index = max_index(output_layer, OUTPUT_NODES);
     if (index == correct_label)
         correct_predictions++;
