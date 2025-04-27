@@ -26,8 +26,8 @@
 #define DEFAULT_TEST_IMAGES "mnist_test_images.bin"
 #define DEFAULT_TEST_LABELS "mnist_test_labels.bin"
 #define DEFAULT_MODEL "model.bin"
-#define MAX_TRAIN 10000 // 只用40000张图片，便于调试和本地运行
-#define MAX_TEST 10000
+#define MAX_TRAIN 1000 // 只用1000张图片，便于调试和本地运行
+#define MAX_TEST 1000
 
 // ─────────────── 动态数据全局变量 ───────────────
 double *training_images = NULL;         // [MAX_TRAIN][28*28]
