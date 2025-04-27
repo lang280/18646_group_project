@@ -6,7 +6,8 @@
 #include <math.h>
 
 // Neural network dimensions - must match main.c
-#define INPUT_NODES 784
+#define NEW_INPUT_SIZE 256
+#define INPUT_NODES (NEW_INPUT_SIZE * NEW_INPUT_SIZE)
 #define HIDDEN_NODES 256
 #define OUTPUT_NODES 10
 
@@ -32,8 +33,8 @@ double sigmoid(double x);
  */
 void forward_propagate(
     const double input[INPUT_NODES],
-    const double weight1[INPUT_NODES][HIDDEN_NODES],
-    const double weight2[HIDDEN_NODES][OUTPUT_NODES],
+    const double weight1[INPUT_NODES * HIDDEN_NODES],
+    const double weight2[HIDDEN_NODES * OUTPUT_NODES],
     const double bias1[HIDDEN_NODES],
     const double bias2[OUTPUT_NODES],
     double hidden[HIDDEN_NODES],

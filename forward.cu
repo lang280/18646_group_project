@@ -68,8 +68,8 @@ __global__ void output_layer_kernel(
 extern "C"
 void forward_propagate(
     const double input[INPUT_NODES],
-    const double weight1[INPUT_NODES][HIDDEN_NODES],
-    const double weight2[HIDDEN_NODES][OUTPUT_NODES],
+    const double weight1_flat[INPUT_NODES * HIDDEN_NODES],
+    const double weight2_flat[HIDDEN_NODES * OUTPUT_NODES],
     const double bias1[HIDDEN_NODES],
     const double bias2[OUTPUT_NODES],
     double hidden[HIDDEN_NODES],
@@ -110,26 +110,26 @@ void forward_propagate(
     double *d_input = NULL, *d_weight1 = NULL, *d_weight2 = NULL;
     double *d_bias1 = NULL, *d_bias2 = NULL, *d_hidden = NULL, *d_output = NULL;
     
-    // Flatten weight matrices
-    double weight1_flat[INPUT_NODES * HIDDEN_NODES];
-    double weight2_flat[HIDDEN_NODES * OUTPUT_NODES];
+    // // Flatten weight matrices
+    // double weight1_flat[INPUT_NODES * HIDDEN_NODES];
+    // double weight2_flat[HIDDEN_NODES * OUTPUT_NODES];
     
     // Variables for kernel launch
     int threadsPerBlock = 256;
     int blocksPerGrid;
     
-    // Flatten weight matrices for easier CUDA memory handling
-    for (int i = 0; i < INPUT_NODES; i++) {
-        for (int j = 0; j < HIDDEN_NODES; j++) {
-            weight1_flat[i * HIDDEN_NODES + j] = weight1[i][j];
-        }
-    }
+    // // Flatten weight matrices for easier CUDA memory handling
+    // for (int i = 0; i < INPUT_NODES; i++) {
+    //     for (int j = 0; j < HIDDEN_NODES; j++) {
+    //         weight1_flat[i * HIDDEN_NODES + j] = weight1[i][j];
+    //     }
+    // }
     
-    for (int i = 0; i < HIDDEN_NODES; i++) {
-        for (int j = 0; j < OUTPUT_NODES; j++) {
-            weight2_flat[i * OUTPUT_NODES + j] = weight2[i][j];
-        }
-    }
+    // for (int i = 0; i < HIDDEN_NODES; i++) {
+    //     for (int j = 0; j < OUTPUT_NODES; j++) {
+    //         weight2_flat[i * OUTPUT_NODES + j] = weight2[i][j];
+    //     }
+    // }
     
     if (should_log) {
         fprintf(stderr, "[CUDA] Allocating GPU memory...\n");
