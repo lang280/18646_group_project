@@ -5,12 +5,14 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "forward.h" // Include our CUDA-optimized forward propagation
+#include "logging.h" // Include logging utilities
 
 // ─────────────── 内存检查宏 ───────────────
 #define CHECK_PTR(p, msg)                      \
     if (!(p))                                  \
     {                                          \
-        printf("Failed to malloc: %s\n", msg); \
+        LOG_ERROR("Failed to malloc: %s", msg); \
         exit(1);                               \
     }
 
@@ -52,9 +54,7 @@ static inline double diff_sec(struct timespec a, struct timespec b)
 }
 
 // ReLU及其导数
-double relu(double x) { return x > 0 ? x : 0; }
 double relu_derivative(double x) { return x > 0 ? 1 : 0; }
-double sigmoid(double x) { return 1.0 / (1.0 + exp(-x)); }
 int max_index(double *arr, int size)
 {
     int max_i = 0;
@@ -95,10 +95,12 @@ void resize_28_to_256(const double *src, double *dst)
 // MNIST数据加载
 int load_mnist_images(const char *filename, double *arr, int max_count)
 {
+    LOG_INFO("Loading images from %s", filename);
+    
     FILE *f = fopen(filename, "rb");
     if (!f)
     {
-        printf("Error opening %s\n", filename);
+        LOG_ERROR("Error opening %s", filename);
         exit(1);
     }
     fseek(f, 16, SEEK_SET);
@@ -112,14 +114,18 @@ int load_mnist_images(const char *filename, double *arr, int max_count)
                 arr[i * OLD_INPUT_SIZE * OLD_INPUT_SIZE + j] = pixel / 255.0;
 END:
     fclose(f);
+    LOG_INFO("Loaded %d images", i);
     return i;
 }
+
 int load_mnist_labels(const char *filename, double *arr, int max_count)
 {
+    LOG_INFO("Loading labels from %s", filename);
+    
     FILE *f = fopen(filename, "rb");
     if (!f)
     {
-        printf("Error opening %s\n", filename);
+        LOG_ERROR("Error opening %s", filename);
         exit(1);
     }
     fseek(f, 8, SEEK_SET);
@@ -134,16 +140,19 @@ int load_mnist_labels(const char *filename, double *arr, int max_count)
     }
 END:
     fclose(f);
+    LOG_INFO("Loaded %d labels", i);
     return i;
 }
 
 // 权重文件保存 / 读取
 void save_weights_biases(const char *file_name)
 {
+    LOG_INFO("Saving model to %s", file_name);
+    
     FILE *file = fopen(file_name, "wb");
     if (!file)
     {
-        printf("Error opening file to save model\n");
+        LOG_ERROR("Error opening file to save model");
         exit(1);
     }
     fwrite(weight1, sizeof(double), INPUT_NODES * HIDDEN_NODES, file);
@@ -151,13 +160,18 @@ void save_weights_biases(const char *file_name)
     fwrite(bias1, sizeof(double), HIDDEN_NODES, file);
     fwrite(bias2, sizeof(double), OUTPUT_NODES, file);
     fclose(file);
+    
+    LOG_INFO("Model saved successfully");
 }
+
 void load_weights_biases(const char *file_name)
 {
+    LOG_INFO("Loading model from %s", file_name);
+    
     FILE *file = fopen(file_name, "rb");
     if (!file)
     {
-        printf("Error opening file to load model\n");
+        LOG_ERROR("Error opening file to load model");
         exit(1);
     }
     fread(weight1, sizeof(double), INPUT_NODES * HIDDEN_NODES, file);
@@ -165,6 +179,8 @@ void load_weights_biases(const char *file_name)
     fread(bias1, sizeof(double), HIDDEN_NODES, file);
     fread(bias2, sizeof(double), OUTPUT_NODES, file);
     fclose(file);
+    
+    LOG_INFO("Model loaded successfully");
 }
 
 // 前向/反向/更新
@@ -176,20 +192,9 @@ void train(double *input, double *output, int correct_label)
     double hidden[HIDDEN_NODES];
     double output_layer[OUTPUT_NODES];
 
-    for (int i = 0; i < HIDDEN_NODES; i++)
-    {
-        double sum = bias1[i];
-        for (int j = 0; j < INPUT_NODES; j++)
-            sum += input[j] * weight1[j * HIDDEN_NODES + i];
-        hidden[i] = relu(sum);
-    }
-    for (int i = 0; i < OUTPUT_NODES; i++)
-    {
-        double sum = bias2[i];
-        for (int j = 0; j < HIDDEN_NODES; j++)
-            sum += hidden[j] * weight2[j * OUTPUT_NODES + i];
-        output_layer[i] = sigmoid(sum);
-    }
+    // 使用CUDA加速的前向传播
+    forward_propagate(input, weight1, weight2, bias1, bias2, hidden, output_layer, 0);
+
     clock_gettime(CLOCK_MONOTONIC, &t1);
     g_ff_time += diff_sec(t0, t1);
 
@@ -234,20 +239,10 @@ void train(double *input, double *output, int correct_label)
 void test(double *input, int correct_label)
 {
     double hidden[HIDDEN_NODES], output_layer[OUTPUT_NODES];
-    for (int i = 0; i < HIDDEN_NODES; i++)
-    {
-        double sum = bias1[i];
-        for (int j = 0; j < INPUT_NODES; j++)
-            sum += input[j] * weight1[j * HIDDEN_NODES + i];
-        hidden[i] = relu(sum);
-    }
-    for (int i = 0; i < OUTPUT_NODES; i++)
-    {
-        double sum = bias2[i];
-        for (int j = 0; j < HIDDEN_NODES; j++)
-            sum += hidden[j] * weight2[j * OUTPUT_NODES + i];
-        output_layer[i] = sigmoid(sum);
-    }
+    
+    // 使用CUDA加速的前向传播
+    forward_propagate(input, weight1, weight2, bias1, bias2, hidden, output_layer, 0);
+    
     if (max_index(output_layer, OUTPUT_NODES) == correct_label)
         correct_predictions++;
 }
@@ -255,6 +250,8 @@ void test(double *input, int correct_label)
 // 权重初始化
 void init_weights()
 {
+    LOG_INFO("Initializing weights with Xavier initialization");
+    
     srand(time(NULL));
     double w1_lim = sqrt(6.0 / (INPUT_NODES + HIDDEN_NODES));
     double w2_lim = sqrt(6.0 / (HIDDEN_NODES + OUTPUT_NODES));
@@ -268,6 +265,8 @@ void init_weights()
             weight2[i * OUTPUT_NODES + j] = ((double)rand() / RAND_MAX * 2 - 1) * w2_lim;
     for (int i = 0; i < OUTPUT_NODES; i++)
         bias2[i] = 0;
+    
+    LOG_INFO("Weights initialized successfully");
 }
 
 // 训练模式
@@ -286,52 +285,61 @@ void train_mode()
     if (epochs < 1)
         epochs = 10;
 
-    struct timespec ld_s, ld_e;
-    clock_gettime(CLOCK_MONOTONIC, &ld_s);
+    Timer load_timer = timer_start("Loading training data");
     int train_count = load_mnist_images(train_img_path, training_images, MAX_TRAIN);
     int label_count = load_mnist_labels(train_label_path, training_labels, MAX_TRAIN);
-    clock_gettime(CLOCK_MONOTONIC, &ld_e);
-    double ld_time = diff_sec(ld_s, ld_e);
+    double load_time = timer_stop(&load_timer);
+    
     if (label_count != train_count)
     {
-        printf("Image/Label mismatch!\n");
+        LOG_ERROR("Image/Label count mismatch: %d images, %d labels", train_count, label_count);
         exit(1);
     }
-    printf("Train set: imgs %d | labels %d | load %.3fs\n", train_count, label_count, ld_time);
+    printf("Train set: imgs %d | labels %d | load %.3fs\n", train_count, label_count, load_time);
 
-    printf("开始resize...\n");
+    LOG_INFO("Resizing images from 28x28 to 256x256");
+    Timer resize_timer = timer_start("Image resizing");
     for (int i = 0; i < train_count; ++i)
         resize_28_to_256(training_images + i * OLD_INPUT_SIZE * OLD_INPUT_SIZE, training_images_resized + i * INPUT_NODES);
-    printf("resize完成！\n");
+    timer_stop(&resize_timer);
 
-    printf("Initializing weights...\n");
     init_weights();
 
-    printf("Start Training...\n");
+    LOG_INFO("Starting training for %d epochs", epochs);
+    Timer total_timer = timer_start("Total training");
+    double total_training_time = 0.0;
+    
     for (int epoch = 0; epoch < epochs; epoch++)
     {
-        struct timespec e_s, e_e;
+        char epoch_desc[50];
+        snprintf(epoch_desc, sizeof(epoch_desc), "Epoch %d/%d", epoch + 1, epochs);
+        
+        Timer epoch_timer = timer_start(epoch_desc);
         g_ff_time = g_bp_time = g_wu_time = 0;
         forward_prob_output = 0;
-        clock_gettime(CLOCK_MONOTONIC, &e_s);
-
+        
+        progress_init(train_count, epoch_desc);
+        
         for (int i = 0; i < train_count; i++)
         {
+            progress_update(i, train_count);
             int correct_label = max_index(training_labels + i * OUTPUT_NODES, OUTPUT_NODES);
             train(training_images_resized + i * INPUT_NODES, training_labels + i * OUTPUT_NODES, correct_label);
         }
-
-        clock_gettime(CLOCK_MONOTONIC, &e_e);
-        double ep_time = diff_sec(e_s, e_e);
-
-        printf("Epoch %d : imgs %d | Acc %.4f | "
-               "Time %.3fs (FF %.3fs  BP %.3fs  WU %.3fs)\n",
-               epoch + 1, train_count,
-               (double)forward_prob_output / train_count,
-               ep_time, g_ff_time, g_bp_time, g_wu_time);
+        
+        double epoch_time = timer_stop(&epoch_timer);
+        total_training_time += epoch_time;
+        
+        double accuracy = (double)forward_prob_output / train_count;
+        LOG_INFO("Epoch %d details - FF: %.3fs | BP: %.3fs | WU: %.3fs", 
+                 epoch + 1, g_ff_time, g_bp_time, g_wu_time);
+        progress_finish(accuracy, forward_prob_output, train_count, epoch_time);
     }
+    
+    timer_stop(&total_timer);
+    LOG_INFO("Average epoch time: %.2f seconds", total_training_time / epochs);
+    
     save_weights_biases(model_path);
-    printf("Model saved to %s\n", model_path);
 }
 
 // 推理/测试模式
@@ -343,112 +351,133 @@ void infer_mode()
     input_string("Enter test label file path", test_label_path, MAX_PATH, DEFAULT_TEST_LABELS);
     input_string("Enter model path", model_path, MAX_PATH, DEFAULT_MODEL);
 
-    struct timespec ld_s, ld_e;
-    clock_gettime(CLOCK_MONOTONIC, &ld_s);
+    Timer load_timer = timer_start("Loading test data");
     int test_count = load_mnist_images(test_img_path, test_images, MAX_TEST);
     int label_count = load_mnist_labels(test_label_path, test_labels, MAX_TEST);
-    clock_gettime(CLOCK_MONOTONIC, &ld_e);
-    double ld_time = diff_sec(ld_s, ld_e);
+    timer_stop(&load_timer);
+    
     if (label_count != test_count)
     {
-        printf("Image/Label mismatch!\n");
+        LOG_ERROR("Image/Label count mismatch: %d images, %d labels", test_count, label_count);
         exit(1);
     }
-    printf("Test set : imgs %d | labels %d | load %.3fs\n", test_count, label_count, ld_time);
 
-    printf("开始resize...\n");
+    LOG_INFO("Resizing images from 28x28 to 256x256");
+    Timer resize_timer = timer_start("Image resizing");
     for (int i = 0; i < test_count; ++i)
         resize_28_to_256(test_images + i * OLD_INPUT_SIZE * OLD_INPUT_SIZE, test_images_resized + i * INPUT_NODES);
-    printf("resize完成！\n");
+    timer_stop(&resize_timer);
 
-    printf("Loading model...\n");
     load_weights_biases(model_path);
 
+    LOG_INFO("Testing model");
+    Timer test_timer = timer_start("Model testing");
     correct_predictions = 0;
+    
+    progress_init(test_count, "Testing");
+    
     for (int i = 0; i < test_count; i++)
     {
+        progress_update(i, test_count);
         int correct_label = max_index(test_labels + i * OUTPUT_NODES, OUTPUT_NODES);
         test(test_images_resized + i * INPUT_NODES, correct_label);
     }
-    printf("Testing Accuracy: %.4f\n", (double)correct_predictions / test_count);
+    
+    double test_time = timer_stop(&test_timer);
+    double accuracy = (double)correct_predictions / test_count;
+    progress_finish(accuracy, correct_predictions, test_count, test_time);
 }
 
 // 经典一键 train+test
 void classic_train_and_test()
 {
-    printf("== Classic Train + Test ==\n");
-
-    struct timespec ld_s, ld_e;
-    clock_gettime(CLOCK_MONOTONIC, &ld_s);
+    LOG_INFO("== Classic Train + Test ==");
+    
+    Timer train_load_timer = timer_start("Loading training data");
     int train_count = load_mnist_images(DEFAULT_TRAIN_IMAGES, training_images, MAX_TRAIN);
     int train_lbl = load_mnist_labels(DEFAULT_TRAIN_LABELS, training_labels, MAX_TRAIN);
-    clock_gettime(CLOCK_MONOTONIC, &ld_e);
-    double ld_time1 = diff_sec(ld_s, ld_e);
+    timer_stop(&train_load_timer);
+    
     if (train_count != train_lbl)
     {
-        printf("Train mismatch!\n");
+        LOG_ERROR("Train data mismatch: %d images, %d labels", train_count, train_lbl);
         exit(1);
     }
-    printf("Train set: imgs %d | labels %d | load %.3fs\n",
-           train_count, train_lbl, ld_time1);
 
-    clock_gettime(CLOCK_MONOTONIC, &ld_s);
+    Timer test_load_timer = timer_start("Loading test data");
     int test_count = load_mnist_images(DEFAULT_TEST_IMAGES, test_images, MAX_TEST);
     int test_lbl = load_mnist_labels(DEFAULT_TEST_LABELS, test_labels, MAX_TEST);
-    clock_gettime(CLOCK_MONOTONIC, &ld_e);
-    double ld_time2 = diff_sec(ld_s, ld_e);
+    timer_stop(&test_load_timer);
+    
     if (test_count != test_lbl)
     {
-        printf("Test mismatch!\n");
+        LOG_ERROR("Test data mismatch: %d images, %d labels", test_count, test_lbl);
         exit(1);
     }
-    printf("Test set : imgs %d | labels %d | load %.3fs\n",
-           test_count, test_lbl, ld_time2);
 
-    printf("开始resize...\n");
+    LOG_INFO("Resizing images from 28x28 to 256x256");
+    Timer resize_timer = timer_start("Image resizing");
     for (int i = 0; i < train_count; ++i)
         resize_28_to_256(training_images + i * OLD_INPUT_SIZE * OLD_INPUT_SIZE, training_images_resized + i * INPUT_NODES);
     for (int i = 0; i < test_count; ++i)
         resize_28_to_256(test_images + i * OLD_INPUT_SIZE * OLD_INPUT_SIZE, test_images_resized + i * INPUT_NODES);
-    printf("resize完成！\n");
+    timer_stop(&resize_timer);
 
-    printf("Initializing weights...\n");
     init_weights();
 
     int epochs = 10;
-    printf("Start Training...\n");
+    LOG_INFO("Starting training for %d epochs", epochs);
+    Timer total_timer = timer_start("Total training");
+    double total_training_time = 0.0;
+    
     for (int epoch = 0; epoch < epochs; epoch++)
     {
-        struct timespec e_s, e_e;
+        char epoch_desc[50];
+        snprintf(epoch_desc, sizeof(epoch_desc), "Epoch %d/%d", epoch + 1, epochs);
+        
+        Timer epoch_timer = timer_start(epoch_desc);
         g_ff_time = g_bp_time = g_wu_time = 0;
         forward_prob_output = 0;
-        clock_gettime(CLOCK_MONOTONIC, &e_s);
-
+        
+        progress_init(train_count, epoch_desc);
+        
         for (int i = 0; i < train_count; i++)
         {
+            progress_update(i, train_count);
             int correct_label = max_index(training_labels + i * OUTPUT_NODES, OUTPUT_NODES);
             train(training_images_resized + i * INPUT_NODES, training_labels + i * OUTPUT_NODES, correct_label);
         }
-
-        clock_gettime(CLOCK_MONOTONIC, &e_e);
-        double ep_time = diff_sec(e_s, e_e);
-
-        printf("Epoch %d : imgs %d | Acc %.4f | "
-               "Time %.3fs (FF %.3fs  BP %.3fs  WU %.3fs)\n",
-               epoch + 1, train_count,
-               (double)forward_prob_output / train_count,
-               ep_time, g_ff_time, g_bp_time, g_wu_time);
+        
+        double epoch_time = timer_stop(&epoch_timer);
+        total_training_time += epoch_time;
+        
+        double accuracy = (double)forward_prob_output / train_count;
+        LOG_INFO("Epoch %d details - FF: %.3fs | BP: %.3fs | WU: %.3fs", 
+                 epoch + 1, g_ff_time, g_bp_time, g_wu_time);
+        progress_finish(accuracy, forward_prob_output, train_count, epoch_time);
     }
+    
+    timer_stop(&total_timer);
+    LOG_INFO("Average epoch time: %.2f seconds", total_training_time / epochs);
+    
     save_weights_biases(DEFAULT_MODEL);
-    printf("Model saved to %s\n", DEFAULT_MODEL);
 
+    LOG_INFO("Testing model");
+    Timer test_timer = timer_start("Model testing");
     correct_predictions = 0;
+    
+    progress_init(test_count, "Testing");
+    
     for (int i = 0; i < test_count; i++)
     {
+        progress_update(i, test_count);
         int correct_label = max_index(test_labels + i * OUTPUT_NODES, OUTPUT_NODES);
         test(test_images_resized + i * INPUT_NODES, correct_label);
     }
-    printf("Testing Accuracy: %.4f\n", (double)correct_predictions / test_count);
+    
+    double test_time = timer_stop(&test_timer);
+    double accuracy = (double)correct_predictions / test_count;
+    progress_finish(accuracy, correct_predictions, test_count, test_time);
 }
 
 // 主程序
@@ -475,10 +504,10 @@ int main()
     bias2 = (double *)malloc(sizeof(double) * OUTPUT_NODES);
     CHECK_PTR(bias2, "bias2");
 
-    printf("===== Deep Neural Network (C版, 256x256输入, 动态分配/内存检查/缩小数据量) =====\n");
-    printf("1. 训练（自定义参数和路径）\n");
-    printf("2. 推理/测试（自定义模型和测试集路径）\n");
-    printf("3. 经典一键训练+推理（默认路径） [默认选项]\n");
+    LOG_INFO("===== Deep Neural Network (C版, 256x256输入, CUDA加速前向传播) =====");
+    LOG_INFO("1. 训练（自定义参数和路径）");
+    LOG_INFO("2. 推理/测试（自定义模型和测试集路径）");
+    LOG_INFO("3. 经典一键训练+推理（默认路径） [默认选项]");
     printf("请选择 (1/2/3, 回车默认3): ");
 
     char choice[8];

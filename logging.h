@@ -49,21 +49,19 @@ static inline void progress_init(int total, const char* desc) {
 
 static inline void progress_update(int current, int total) {
     if (LOG_LEVEL >= LOG_LEVEL_INFO) {
-        // 每处理 total/20 个数据显示一个点
-        if (current % (total / 20 > 0 ? total / 20 : 1) == 0) {
-            printf(".");
-            fflush(stdout);
-        }
+        // 清除当前行并显示处理进度计数器
+        printf("\r%s: %d/%d images processed", "Progress", current + 1, total);
+        fflush(stdout);
     }
 }
 
 static inline void progress_finish(double accuracy, int correct, int total, double time_taken) {
     if (LOG_LEVEL >= LOG_LEVEL_INFO) {
         if (time_taken > 0) {
-            printf(" Done in %.2f seconds | Accuracy: %.4f (%d/%d correct)\n", 
+            printf("\n Done in %.2f seconds | Accuracy: %.4f (%d/%d correct)\n", 
                    time_taken, accuracy, correct, total);
         } else {
-            printf(" Done | Accuracy: %.4f (%d/%d correct)\n", accuracy, correct, total);
+            printf("\n Done | Accuracy: %.4f (%d/%d correct)\n", accuracy, correct, total);
         }
     }
 }
