@@ -36,14 +36,14 @@ void cleanup_fused_training();
  * @param correct_predictions Output parameter: will be incremented by the number of correct predictions in the batch
  */
 void train_batch_fused(
-    const double* batch_input,
-    const double* batch_targets,
-    double* weight1,
-    double* weight2, 
-    double* bias1,
-    double* bias2,
+    const float* batch_input,
+    const float* batch_targets,
+    float* weight1,
+    float* weight2, 
+    float* bias1,
+    float* bias2,
     int batch_size,
-    double learning_rate,
+    float learning_rate,
     int* correct_predictions
 );
 

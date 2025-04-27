@@ -35,20 +35,20 @@
 #define BATCH_SIZE 256    // 新增：批处理大小
 
 // ─────────────── 动态数据全局变量 ───────────────
-double *training_images = NULL;         // [MAX_TRAIN][28*28]
-double *test_images = NULL;             // [MAX_TEST][28*28]
-double *training_images_resized = NULL; // [MAX_TRAIN][INPUT_NODES]
-double *test_images_resized = NULL;     // [MAX_TEST][INPUT_NODES]
-double *training_labels = NULL;         // [MAX_TRAIN][OUTPUT_NODES]
-double *test_labels = NULL;             // [MAX_TEST][OUTPUT_NODES]
-double *weight1 = NULL;                 // [INPUT_NODES][HIDDEN_NODES]
-double *weight2 = NULL;                 // [HIDDEN_NODES][OUTPUT_NODES]
-double *bias1 = NULL;                   // [HIDDEN_NODES]
-double *bias2 = NULL;                   // [OUTPUT_NODES]
+float *training_images = NULL;         // [MAX_TRAIN][28*28]
+float *test_images = NULL;             // [MAX_TEST][28*28]
+float *training_images_resized = NULL; // [MAX_TRAIN][INPUT_NODES]
+float *test_images_resized = NULL;     // [MAX_TEST][INPUT_NODES]
+float *training_labels = NULL;         // [MAX_TRAIN][OUTPUT_NODES]
+float *test_labels = NULL;             // [MAX_TEST][OUTPUT_NODES]
+float *weight1 = NULL;                 // [INPUT_NODES][HIDDEN_NODES]
+float *weight2 = NULL;                 // [HIDDEN_NODES][OUTPUT_NODES]
+float *bias1 = NULL;                   // [HIDDEN_NODES]
+float *bias2 = NULL;                   // [OUTPUT_NODES]
 
 // 新增: 批处理临时缓冲区
-double *batch_input = NULL;             // [BATCH_SIZE][INPUT_NODES]
-double *batch_labels = NULL;            // [BATCH_SIZE][OUTPUT_NODES]
+float *batch_input = NULL;             // [BATCH_SIZE][INPUT_NODES]
+float *batch_labels = NULL;            // [BATCH_SIZE][OUTPUT_NODES]
 
 int correct_predictions;
 int forward_prob_output;
@@ -60,7 +60,7 @@ static inline double diff_sec(struct timespec a, struct timespec b)
     return (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
 }
 
-int max_index(double *arr, int size)
+int max_index(float *arr, int size)
 {
     int max_i = 0;
     for (int i = 1; i < size; i++)
@@ -82,7 +82,7 @@ void input_string(const char *prompt, char *buf, int maxlen, const char *default
 }
 
 // 最近邻插值放大图片
-void resize_28_to_256(const double *src, double *dst)
+void resize_28_to_256(const float *src, float *dst)
 {
     int new_size = NEW_INPUT_SIZE;
     int old_size = OLD_INPUT_SIZE;
@@ -98,7 +98,7 @@ void resize_28_to_256(const double *src, double *dst)
 }
 
 // MNIST数据加载
-int load_mnist_images(const char *filename, double *arr, int max_count)
+int load_mnist_images(const char *filename, float *arr, int max_count)
 {
     LOG_INFO("Loading images from %s", filename);
     
@@ -116,14 +116,14 @@ int load_mnist_images(const char *filename, double *arr, int max_count)
             if (fread(&pixel, 1, 1, f) != 1)
                 goto END;
             else
-                arr[i * OLD_INPUT_SIZE * OLD_INPUT_SIZE + j] = pixel / 255.0;
+                arr[i * OLD_INPUT_SIZE * OLD_INPUT_SIZE + j] = pixel / 255.0f;
 END:
     fclose(f);
     LOG_INFO("Loaded %d images", i);
     return i;
 }
 
-int load_mnist_labels(const char *filename, double *arr, int max_count)
+int load_mnist_labels(const char *filename, float *arr, int max_count)
 {
     LOG_INFO("Loading labels from %s", filename);
     
@@ -141,7 +141,7 @@ int load_mnist_labels(const char *filename, double *arr, int max_count)
         if (fread(&label, 1, 1, f) != 1)
             goto END;
         for (j = 0; j < OUTPUT_NODES; j++)
-            arr[i * OUTPUT_NODES + j] = (j == label) ? 1.0 : 0.0;
+            arr[i * OUTPUT_NODES + j] = (j == label) ? 1.0f : 0.0f;
     }
 END:
     fclose(f);
@@ -160,10 +160,10 @@ void save_weights_biases(const char *file_name)
         LOG_ERROR("Error opening file to save model");
         exit(1);
     }
-    fwrite(weight1, sizeof(double), INPUT_NODES * HIDDEN_NODES, file);
-    fwrite(weight2, sizeof(double), HIDDEN_NODES * OUTPUT_NODES, file);
-    fwrite(bias1, sizeof(double), HIDDEN_NODES, file);
-    fwrite(bias2, sizeof(double), OUTPUT_NODES, file);
+    fwrite(weight1, sizeof(float), INPUT_NODES * HIDDEN_NODES, file);
+    fwrite(weight2, sizeof(float), HIDDEN_NODES * OUTPUT_NODES, file);
+    fwrite(bias1, sizeof(float), HIDDEN_NODES, file);
+    fwrite(bias2, sizeof(float), OUTPUT_NODES, file);
     fclose(file);
     
     LOG_INFO("Model saved successfully");
@@ -179,18 +179,18 @@ void load_weights_biases(const char *file_name)
         LOG_ERROR("Error opening file to load model");
         exit(1);
     }
-    fread(weight1, sizeof(double), INPUT_NODES * HIDDEN_NODES, file);
-    fread(weight2, sizeof(double), HIDDEN_NODES * OUTPUT_NODES, file);
-    fread(bias1, sizeof(double), HIDDEN_NODES, file);
-    fread(bias2, sizeof(double), OUTPUT_NODES, file);
+    fread(weight1, sizeof(float), INPUT_NODES * HIDDEN_NODES, file);
+    fread(weight2, sizeof(float), HIDDEN_NODES * OUTPUT_NODES, file);
+    fread(bias1, sizeof(float), HIDDEN_NODES, file);
+    fread(bias2, sizeof(float), OUTPUT_NODES, file);
     fclose(file);
     
     LOG_INFO("Model loaded successfully");
 }
 
 // 新增：准备一个训练批次
-int prepare_batch(double *batch_data, double *batch_targets, 
-                  double *dataset, double *targets, 
+int prepare_batch(float *batch_data, float *batch_targets, 
+                  float *dataset, float *targets, 
                   int start_idx, int total_count, int batch_size)
 {
     int actual_batch_size = batch_size;
@@ -201,17 +201,17 @@ int prepare_batch(double *batch_data, double *batch_targets,
     
     // 复制图像数据
     memcpy(batch_data, dataset + start_idx * INPUT_NODES, 
-           actual_batch_size * INPUT_NODES * sizeof(double));
+           actual_batch_size * INPUT_NODES * sizeof(float));
     
     // 复制标签数据
     memcpy(batch_targets, targets + start_idx * OUTPUT_NODES, 
-           actual_batch_size * OUTPUT_NODES * sizeof(double));
+           actual_batch_size * OUTPUT_NODES * sizeof(float));
     
     return actual_batch_size;
 }
 
 // 新增：批次测试（只进行前向传播）
-void test_batch(double *dataset, double *targets, int dataset_size)
+void test_batch(float *dataset, float *targets, int dataset_size)
 {
     LOG_INFO("Testing model on %d images", dataset_size);
     Timer test_timer = timer_start("Model testing");
@@ -234,7 +234,7 @@ void test_batch(double *dataset, double *targets, int dataset_size)
         train_batch_fused(
             batch_input, batch_labels, 
             weight1, weight2, bias1, bias2, 
-            current_batch_size, 0.0, &correct_predictions
+            current_batch_size, 0.0f, &correct_predictions
         );
         
         // 更新进度条
@@ -253,18 +253,18 @@ void init_weights()
     LOG_INFO("Initializing weights with Xavier initialization");
     
     srand(time(NULL));
-    double w1_lim = sqrt(6.0 / (INPUT_NODES + HIDDEN_NODES));
-    double w2_lim = sqrt(6.0 / (HIDDEN_NODES + OUTPUT_NODES));
+    float w1_lim = sqrtf(6.0f / (INPUT_NODES + HIDDEN_NODES));
+    float w2_lim = sqrtf(6.0f / (HIDDEN_NODES + OUTPUT_NODES));
     for (int i = 0; i < INPUT_NODES; i++)
         for (int j = 0; j < HIDDEN_NODES; j++)
-            weight1[i * HIDDEN_NODES + j] = ((double)rand() / RAND_MAX * 2 - 1) * w1_lim;
+            weight1[i * HIDDEN_NODES + j] = ((float)rand() / RAND_MAX * 2.0f - 1.0f) * w1_lim;
     for (int i = 0; i < HIDDEN_NODES; i++)
-        bias1[i] = 0;
+        bias1[i] = 0.0f;
     for (int i = 0; i < HIDDEN_NODES; i++)
         for (int j = 0; j < OUTPUT_NODES; j++)
-            weight2[i * OUTPUT_NODES + j] = ((double)rand() / RAND_MAX * 2 - 1) * w2_lim;
+            weight2[i * OUTPUT_NODES + j] = ((float)rand() / RAND_MAX * 2.0f - 1.0f) * w2_lim;
     for (int i = 0; i < OUTPUT_NODES; i++)
-        bias2[i] = 0;
+        bias2[i] = 0.0f;
     
     LOG_INFO("Weights initialized successfully");
 }
@@ -362,7 +362,7 @@ void train_mode()
             train_batch_fused(
                 batch_input, batch_labels, 
                 weight1, weight2, bias1, bias2, 
-                current_batch_size, 0.05, &forward_prob_output
+                current_batch_size, 0.05f, &forward_prob_output
             );
             
             clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -499,7 +499,7 @@ void classic_train_and_test()
             train_batch_fused(
                 batch_input, batch_labels, 
                 weight1, weight2, bias1, bias2, 
-                current_batch_size, 0.05, &forward_prob_output
+                current_batch_size, 0.05f, &forward_prob_output
             );
             
             clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -528,31 +528,31 @@ void classic_train_and_test()
 // 主程序
 int main()
 {
-    training_images = (double *)malloc(sizeof(double) * MAX_TRAIN * OLD_INPUT_SIZE * OLD_INPUT_SIZE);
+    training_images = (float *)malloc(sizeof(float) * MAX_TRAIN * OLD_INPUT_SIZE * OLD_INPUT_SIZE);
     CHECK_PTR(training_images, "training_images");
-    test_images = (double *)malloc(sizeof(double) * MAX_TEST * OLD_INPUT_SIZE * OLD_INPUT_SIZE);
+    test_images = (float *)malloc(sizeof(float) * MAX_TEST * OLD_INPUT_SIZE * OLD_INPUT_SIZE);
     CHECK_PTR(test_images, "test_images");
-    training_images_resized = (double *)malloc(sizeof(double) * MAX_TRAIN * INPUT_NODES);
+    training_images_resized = (float *)malloc(sizeof(float) * MAX_TRAIN * INPUT_NODES);
     CHECK_PTR(training_images_resized, "training_images_resized");
-    test_images_resized = (double *)malloc(sizeof(double) * MAX_TEST * INPUT_NODES);
+    test_images_resized = (float *)malloc(sizeof(float) * MAX_TEST * INPUT_NODES);
     CHECK_PTR(test_images_resized, "test_images_resized");
-    training_labels = (double *)malloc(sizeof(double) * MAX_TRAIN * OUTPUT_NODES);
+    training_labels = (float *)malloc(sizeof(float) * MAX_TRAIN * OUTPUT_NODES);
     CHECK_PTR(training_labels, "training_labels");
-    test_labels = (double *)malloc(sizeof(double) * MAX_TEST * OUTPUT_NODES);
+    test_labels = (float *)malloc(sizeof(float) * MAX_TEST * OUTPUT_NODES);
     CHECK_PTR(test_labels, "test_labels");
-    weight1 = (double *)malloc(sizeof(double) * INPUT_NODES * HIDDEN_NODES);
+    weight1 = (float *)malloc(sizeof(float) * INPUT_NODES * HIDDEN_NODES);
     CHECK_PTR(weight1, "weight1");
-    weight2 = (double *)malloc(sizeof(double) * HIDDEN_NODES * OUTPUT_NODES);
+    weight2 = (float *)malloc(sizeof(float) * HIDDEN_NODES * OUTPUT_NODES);
     CHECK_PTR(weight2, "weight2");
-    bias1 = (double *)malloc(sizeof(double) * HIDDEN_NODES);
+    bias1 = (float *)malloc(sizeof(float) * HIDDEN_NODES);
     CHECK_PTR(bias1, "bias1");
-    bias2 = (double *)malloc(sizeof(double) * OUTPUT_NODES);
+    bias2 = (float *)malloc(sizeof(float) * OUTPUT_NODES);
     CHECK_PTR(bias2, "bias2");
     
     // 新增: 批处理临时缓冲区
-    batch_input = (double *)malloc(sizeof(double) * BATCH_SIZE * INPUT_NODES);
+    batch_input = (float *)malloc(sizeof(float) * BATCH_SIZE * INPUT_NODES);
     CHECK_PTR(batch_input, "batch_input");
-    batch_labels = (double *)malloc(sizeof(double) * BATCH_SIZE * OUTPUT_NODES);
+    batch_labels = (float *)malloc(sizeof(float) * BATCH_SIZE * OUTPUT_NODES);
     CHECK_PTR(batch_labels, "batch_labels");
 
     LOG_INFO("===== Deep Neural Network (C版, 256x256输入, CUDA加速批量训练) =====");
