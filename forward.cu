@@ -12,6 +12,18 @@
         goto Error; \
     }
 
+// Memory check macro
+#define CHECK_PTR(ptr, msg) \
+    if (!(ptr)) { \
+        fprintf(stderr, "CUDA memory allocation failed: %s\n", (msg)); \
+        return; \
+    }
+
+// CUDA optimization parameters
+#define TILE_WIDTH 16        // Tile size for shared memory
+#define BLOCK_SIZE 256       // Threads per block
+#define MAX_BLOCKS 65535     // Maximum number of blocks
+
 // CPU implementations of activation functions
 extern "C" {
     double relu(double x) { 
@@ -23,57 +35,80 @@ extern "C" {
     }
 }
 
-// CUDA kernel for calculating hidden layer activations with ReLU
+// Optimized CUDA kernel for calculating hidden layer activations with tiled matrix multiplication
 __global__ void hidden_layer_kernel(
-    const double* input,
-    const double* weights,
-    const double* bias,
-    double* output,
-    int input_size,
-    int output_size
+    const double* __restrict__ input,
+    const double* __restrict__ weights,
+    const double* __restrict__ bias,
+    double* __restrict__ output,
+    const int input_size,
+    const int output_size
 ) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // Use shared memory for input tiles to reduce global memory accesses
+    __shared__ double tile_input[TILE_WIDTH];
     
-    if (i < output_size) {
-        double sum = bias[i];
-        for (int j = 0; j < input_size; j++) {
-            sum += input[j] * weights[j * output_size + i];
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const int local_tid = threadIdx.x;
+    
+    // Each thread computes one output node
+    if (tid < output_size) {
+        double sum = bias[tid]; // Start with bias
+        
+        // Process input in tiles to improve memory access patterns
+        for (int t = 0; t < input_size; t += TILE_WIDTH) {
+            // Load a tile of input data into shared memory
+            if (t + local_tid < input_size && local_tid < TILE_WIDTH) {
+                tile_input[local_tid] = input[t + local_tid];
+            }
+            
+            // Wait for all threads to load their data
+            __syncthreads();
+            
+            // Process the tile
+            const int tile_end = min(TILE_WIDTH, input_size - t);
+            for (int j = 0; j < tile_end; j++) {
+                sum += tile_input[j] * weights[(t + j) * output_size + tid];
+            }
+            
+            // Wait for all threads to finish using the tile before loading a new one
+            __syncthreads();
         }
+        
         // Apply ReLU activation
-        output[i] = sum > 0 ? sum : 0;
+        output[tid] = sum > 0 ? sum : 0;
     }
 }
 
 // CUDA kernel for calculating output layer activations with Sigmoid
 __global__ void output_layer_kernel(
-    const double* input,
-    const double* weights,
-    const double* bias,
-    double* output,
-    int input_size,
-    int output_size
+    const double* __restrict__ input,
+    const double* __restrict__ weights,
+    const double* __restrict__ bias,
+    double* __restrict__ output,
+    const int input_size,
+    const int output_size
 ) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
     
-    if (i < output_size) {
-        double sum = bias[i];
+    if (tid < output_size) {
+        double sum = bias[tid];
         for (int j = 0; j < input_size; j++) {
-            sum += input[j] * weights[j * output_size + i];
+            sum += input[j] * weights[j * output_size + tid];
         }
         // Apply Sigmoid activation
-        output[i] = 1.0 / (1.0 + exp(-sum));
+        output[tid] = 1.0 / (1.0 + exp(-sum));
     }
 }
 
 extern "C"
 void forward_propagate(
-    const double input[INPUT_NODES],
-    const double weight1_flat[INPUT_NODES * HIDDEN_NODES],
-    const double weight2_flat[HIDDEN_NODES * OUTPUT_NODES],
-    const double bias1[HIDDEN_NODES],
-    const double bias2[OUTPUT_NODES],
-    double hidden[HIDDEN_NODES],
-    double output[OUTPUT_NODES],
+    const double* input,
+    const double* weight1,
+    const double* weight2,
+    const double* bias1,
+    const double* bias2,
+    double* hidden,
+    double* output,
     int num_threads
 ) {
     // For logging performance
@@ -82,7 +117,7 @@ void forward_propagate(
     static bool first_call = true;
     
     // Only log occasionally to avoid flooding output
-    bool should_log = LOG_FORWARD && (call_count % 1000 == 0);
+    bool should_log = LOG_FORWARD && (call_count % 100 == 0);
     
     if (LOG_FORWARD && first_call) {
         // Show GPU info on first run
@@ -97,10 +132,10 @@ void forward_propagate(
     }
     
     // Start timing if logging this call
-    clock_t start_time;
+    clock_t start_time = 0;
     if (should_log) {
         start_time = clock();
-        fprintf(stderr, "[CUDA] Forward pass #%d\n", call_count);
+        fprintf(stderr, "[CUDA] Forward pass #%d with input size %d\n", call_count, INPUT_NODES);
     }
     
     // Declare all variables at the top of the function
@@ -110,29 +145,24 @@ void forward_propagate(
     double *d_input = NULL, *d_weight1 = NULL, *d_weight2 = NULL;
     double *d_bias1 = NULL, *d_bias2 = NULL, *d_hidden = NULL, *d_output = NULL;
     
-    // // Flatten weight matrices
-    // double weight1_flat[INPUT_NODES * HIDDEN_NODES];
-    // double weight2_flat[HIDDEN_NODES * OUTPUT_NODES];
-    
     // Variables for kernel launch
-    int threadsPerBlock = 256;
-    int blocksPerGrid;
+    int threadsPerBlock = BLOCK_SIZE;
+    int blocksPerGrid = 0;
     
-    // // Flatten weight matrices for easier CUDA memory handling
-    // for (int i = 0; i < INPUT_NODES; i++) {
-    //     for (int j = 0; j < HIDDEN_NODES; j++) {
-    //         weight1_flat[i * HIDDEN_NODES + j] = weight1[i][j];
-    //     }
-    // }
-    
-    // for (int i = 0; i < HIDDEN_NODES; i++) {
-    //     for (int j = 0; j < OUTPUT_NODES; j++) {
-    //         weight2_flat[i * OUTPUT_NODES + j] = weight2[i][j];
-    //     }
-    // }
+    // Track if we registered host memory
+    bool hostRegistered = false;
     
     if (should_log) {
         fprintf(stderr, "[CUDA] Allocating GPU memory...\n");
+    }
+    
+    // Use pinned memory for faster transfers
+    cudaStatus = cudaHostRegister((void*)input, INPUT_NODES * sizeof(double), cudaHostRegisterDefault);
+    if (cudaStatus == cudaSuccess) {
+        hostRegistered = true;
+    } else {
+        // Non-fatal error, continue with unpinned memory
+        fprintf(stderr, "Warning: Could not register host memory: %s\n", cudaGetErrorString(cudaStatus));
     }
     
     // Allocate GPU memory
@@ -150,9 +180,9 @@ void forward_propagate(
     
     // Copy data from host to device
     CUDA_CHECK(cudaMemcpy(d_input, input, INPUT_NODES * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy for d_input");
-    CUDA_CHECK(cudaMemcpy(d_weight1, weight1_flat, INPUT_NODES * HIDDEN_NODES * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy for d_weight1");
+    CUDA_CHECK(cudaMemcpy(d_weight1, weight1, INPUT_NODES * HIDDEN_NODES * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy for d_weight1");
     CUDA_CHECK(cudaMemcpy(d_bias1, bias1, HIDDEN_NODES * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy for d_bias1");
-    CUDA_CHECK(cudaMemcpy(d_weight2, weight2_flat, HIDDEN_NODES * OUTPUT_NODES * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy for d_weight2");
+    CUDA_CHECK(cudaMemcpy(d_weight2, weight2, HIDDEN_NODES * OUTPUT_NODES * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy for d_weight2");
     CUDA_CHECK(cudaMemcpy(d_bias2, bias2, OUTPUT_NODES * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy for d_bias2");
     
     if (should_log) {
@@ -160,7 +190,8 @@ void forward_propagate(
     }
     
     // Launch kernel for hidden layer computation
-    blocksPerGrid = (HIDDEN_NODES + threadsPerBlock - 1) / threadsPerBlock;
+    // Calculate appropriate grid size (capped at MAX_BLOCKS)
+    blocksPerGrid = min((HIDDEN_NODES + threadsPerBlock - 1) / threadsPerBlock, MAX_BLOCKS);
     
     hidden_layer_kernel<<<blocksPerGrid, threadsPerBlock>>>(
         d_input, d_weight1, d_bias1, d_hidden, INPUT_NODES, HIDDEN_NODES
@@ -175,7 +206,7 @@ void forward_propagate(
     }
     
     // Launch kernel for output layer computation
-    blocksPerGrid = (OUTPUT_NODES + threadsPerBlock - 1) / threadsPerBlock;
+    blocksPerGrid = min((OUTPUT_NODES + threadsPerBlock - 1) / threadsPerBlock, MAX_BLOCKS);
     
     output_layer_kernel<<<blocksPerGrid, threadsPerBlock>>>(
         d_hidden, d_weight2, d_bias2, d_output, HIDDEN_NODES, OUTPUT_NODES
@@ -205,6 +236,10 @@ void forward_propagate(
     
     call_count++;
     
+    // Unregister host memory if we registered it
+    if (hostRegistered) {
+        cudaHostUnregister((void*)input);
+    }
     goto Cleanup;  // Skip error message if successful
 
 Error:
