@@ -182,10 +182,10 @@ void train(double *input, double *output, int correct_label)
         forward_prob_output++;
     g_ff_time += diff_sec(t0, t1);
 
-    backward_propagate(input, output, weight1, weight2, bias1, bias2, hidden, output_layer, 1, 0.05)
+    backward_propagate(input, output, weight1, weight2, bias1, bias2, hidden, output_layer, 1, 0.05);
 
     clock_gettime(CLOCK_MONOTONIC, &t2);
-    g_bp_time += diff_sec(t1, t2)
+    g_bp_time += diff_sec(t1, t2);
 
     clock_gettime(CLOCK_MONOTONIC, &t3);
     g_wu_time += diff_sec(t2, t3);
