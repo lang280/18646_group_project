@@ -3,22 +3,22 @@
 
 ### CUDA version
 ```
-nvcc -o new new.c forward.cu backward.cu -lm -arch=sm_75
+nvcc -o new.x new.c forward.cu backward.cu -lm -arch=sm_75
 ```
 
 
 ### Run
 ```
-./new
+./new.x
 ```
 
 ### Original version
 ```
-gcc -o ori ori.c -lm
+gcc -o ori.x ori.c -lm
 ```
 
 ### Run original version
 ```
-./ori
+./ori.x
 ```
 

@@ -8,7 +8,6 @@
 #include "forward.h"
 #include "backward.h"
 
-
 // ─────────────── memory check macro ───────────────
 #define CHECK_PTR(p, msg)                      \
     if (!(p))                                  \
@@ -51,7 +50,6 @@ static inline double diff_sec(struct timespec a, struct timespec b)
 {
     return (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
 }
-
 
 int max_index(double *arr, int size)
 {
@@ -182,10 +180,10 @@ void train(double *input, double *output, int correct_label)
         forward_prob_output++;
     g_ff_time += diff_sec(t0, t1);
 
-    backward_propagate(input, output, weight1, weight2, bias1, bias2, hidden, output_layer, 1, 0.05)
+    backward_propagate(input, output, weight1, weight2, bias1, bias2, hidden, output_layer, 1, 0.05);
 
     clock_gettime(CLOCK_MONOTONIC, &t2);
-    g_bp_time += diff_sec(t1, t2)
+    g_bp_time += diff_sec(t1, t2);
 
     clock_gettime(CLOCK_MONOTONIC, &t3);
     g_wu_time += diff_sec(t2, t3);
@@ -260,10 +258,8 @@ void train_mode()
     }
     printf("Train set: imgs %d | labels %d | load %.3fs\n", train_count, label_count, ld_time);
 
-
     for (int i = 0; i < train_count; ++i)
         resize_28_to_256(training_images + i * OLD_INPUT_SIZE * OLD_INPUT_SIZE, training_images_resized + i * INPUT_NODES);
-
 
     printf("Initializing weights...\n");
     init_weights();
