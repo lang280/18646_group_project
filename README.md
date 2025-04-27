@@ -1,5 +1,24 @@
-基于ubuntu22测试运行
-编译程序
+
+
+
+### CUDA version
 ```
-gcc -o main main.c -lm
+nvcc -o new.x new.c forward.cu backward.cu -lm -arch=sm_75
 ```
+
+
+### Run
+```
+./new.x
+```
+
+### Original version
+```
+gcc -o ori.x ori.c -lm
+```
+
+### Run original version
+```
+./ori.x
+```
+
