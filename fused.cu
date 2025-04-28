@@ -32,7 +32,7 @@
 #define MAX_BLOCKS 65535
 
 // Uncomment to enable CUDA graph optimization
-#define USE_CUDA_GRAPH 0
+// #define USE_CUDA_GRAPH 0
 
 // ────────── Persistent device memory pointers ──────────
 // These are allocated once and reused for all batches
@@ -74,8 +74,8 @@ __device__ inline float sigmoid_derivative(float y) {
 
 // ────────── Forward pass kernels ──────────
 
-// Optimized kernel for hidden layer forward pass (with ReLU activation)
-__global__ void hidden_layer_kernel_batch(
+// Tiled implementation of hidden layer forward pass with vectorized loads
+__global__ void hidden_layer_kernel_batch_tiled(
     const float* __restrict__ batch_input,
     const float* __restrict__ weights,
     const float* __restrict__ bias,
@@ -84,51 +84,96 @@ __global__ void hidden_layer_kernel_batch(
     int hidden_size,
     int batch_size
 ) {
-   // Shared memory for bias
-    extern __shared__ float shared_mem[];
-    float* s_bias = shared_mem;
+    // Define tile sizes
+    const int TILE_DIM_INPUT = 64;  // Size of input tile
+    const int TILE_DIM_HIDDEN = 32; // Size of hidden tile
     
-    // Load bias into shared memory (only need first hidden_size elements)
-    int tid = threadIdx.x;
-    if (tid < hidden_size) {
-        s_bias[tid] = bias[tid];
+    // Shared memory allocation
+    __shared__ float shared_mem[11 * 1024];
+    float* s_input = shared_mem;                               // [TILE_DIM_INPUT]
+    float* s_weights = s_input + TILE_DIM_INPUT;               // [TILE_DIM_INPUT][TILE_DIM_HIDDEN]
+    float* s_bias = s_weights + (TILE_DIM_INPUT * TILE_DIM_HIDDEN);  // [TILE_DIM_HIDDEN]
+    
+    // Thread indices
+    int tx = threadIdx.x % TILE_DIM_HIDDEN;  // Local hidden neuron ID
+    int ty = threadIdx.x / TILE_DIM_HIDDEN;  // Local input ID for loading
+    
+    // Global indices
+    int hidden_idx = blockIdx.y * TILE_DIM_HIDDEN + tx;  // Global hidden neuron ID
+    int batch_idx = blockIdx.z;                          // Batch item
+    
+    // Local register for accumulating partial sums
+    float sum = 0.0f;
+    
+    // Load bias into shared memory
+    if (ty == 0 && hidden_idx < hidden_size) {
+        s_bias[tx] = bias[hidden_idx];
+        sum = bias[hidden_idx];  // Initialize sum with bias
     }
-    __syncthreads();
     
-    // Calculate global thread ID
-    int global_tid = blockIdx.x * blockDim.x + tid;
-    
-    // Each thread calculates one hidden node activation for one image
-    if (global_tid < hidden_size * batch_size) {
-        int batch_idx = global_tid / hidden_size;     // Which image in the batch
-        int hidden_idx = global_tid % hidden_size;    // Which hidden neuron
+    // Process input in tiles
+    for (int tile_start = 0; tile_start < input_size; tile_start += TILE_DIM_INPUT) {
+        __syncthreads();  // Ensure previous tile processing is complete
         
-        // Base pointers for this image/neuron
-        const float* input = batch_input + batch_idx * input_size;
-        float* hidden = batch_hidden + batch_idx * hidden_size;
-        
-        // Calculate the sum for this hidden neuron
-        float sum = s_bias[hidden_idx];  // Use shared memory for bias
-        
-        // Calculate dot product using global memory for weights with loop unrolling
-        int j = 0;
-        
-        // Main loop with compiler-directed unrolling
-        #pragma unroll 4
-        for (j = 0; j < (input_size / 4) * 4; j += 4) {
-            sum += input[j] * weights[j * hidden_size + hidden_idx];
-            sum += input[j+1] * weights[(j+1) * hidden_size + hidden_idx];
-            sum += input[j+2] * weights[(j+2) * hidden_size + hidden_idx];
-            sum += input[j+3] * weights[(j+3) * hidden_size + hidden_idx];
+        // Collaboratively load input tile into shared memory
+        if (ty < TILE_DIM_INPUT/4 && (tile_start + ty*4) < input_size && batch_idx < batch_size) {
+            int input_idx = tile_start + ty*4;
+            // Load 4 input values at once using float4
+            if (input_idx + 3 < input_size) {
+                float4 input_quad = *reinterpret_cast<const float4*>(&batch_input[batch_idx * input_size + input_idx]);
+                s_input[ty*4] = input_quad.x;
+                s_input[ty*4+1] = input_quad.y;
+                s_input[ty*4+2] = input_quad.z;
+                s_input[ty*4+3] = input_quad.w;
+            } else {
+                // Handle boundary conditions
+                for (int i = 0; i < 4 && (input_idx + i) < input_size; i++) {
+                    s_input[ty*4+i] = batch_input[batch_idx * input_size + input_idx + i];
+                }
+            }
         }
         
-        // Handle remaining elements
-        for (; j < input_size; j++) {
-            sum += input[j] * weights[j * hidden_size + hidden_idx];
+        // Collaboratively load weight tile into shared memory
+        // Each thread loads multiple weights
+        for (int i = threadIdx.x; i < TILE_DIM_INPUT * TILE_DIM_HIDDEN; i += blockDim.x) {
+            int input_offset = i / TILE_DIM_HIDDEN;
+            int hidden_offset = i % TILE_DIM_HIDDEN;
+            
+            int input_idx = tile_start + input_offset;
+            int hid_idx = blockIdx.y * TILE_DIM_HIDDEN + hidden_offset;
+            
+            if (input_idx < input_size && hid_idx < hidden_size) {
+                s_weights[input_offset * TILE_DIM_HIDDEN + hidden_offset] = 
+                    weights[input_idx * hidden_size + hid_idx];
+            } else {
+                s_weights[input_offset * TILE_DIM_HIDDEN + hidden_offset] = 0.0f;
+            }
         }
         
-        // Apply ReLU activation and store result
-        hidden[hidden_idx] = relu(sum);
+        __syncthreads();  // Ensure all data is loaded
+        
+        // Compute partial dot products within this tile
+        if (hidden_idx < hidden_size && batch_idx < batch_size) {
+            // Process the tile with vectorized operations where possible
+            for (int i = 0; i < TILE_DIM_INPUT; i += 4) {
+                if (tile_start + i + 3 < input_size) {
+                    sum += s_input[i] * s_weights[i * TILE_DIM_HIDDEN + tx];
+                    sum += s_input[i+1] * s_weights[(i+1) * TILE_DIM_HIDDEN + tx];
+                    sum += s_input[i+2] * s_weights[(i+2) * TILE_DIM_HIDDEN + tx];
+                    sum += s_input[i+3] * s_weights[(i+3) * TILE_DIM_HIDDEN + tx];
+                } else {
+                    for (int j = i; j < TILE_DIM_INPUT && (tile_start + j) < input_size; j++) {
+                        sum += s_input[j] * s_weights[j * TILE_DIM_HIDDEN + tx];
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Write result to global memory
+    if (hidden_idx < hidden_size && batch_idx < batch_size) {
+        batch_hidden[batch_idx * hidden_size + hidden_idx] = relu(sum);
     }
 }
 
@@ -165,41 +210,24 @@ __global__ void hidden_layer_kernel_batch_vectorized4(
         const float* input = batch_input + batch_idx * input_size;
         float* hidden = batch_hidden + batch_idx * hidden_size;
         
-        // Cache bias in register
-        float sum = s_bias[hidden_idx];
+        // Calculate the sum for this hidden neuron
+        float sum = s_bias[hidden_idx];  // Use shared memory for bias
         
-        // Cache weight offset in register for better addressing
-        int weight_offset = hidden_idx;
-        
-        // Process four elements at a time using float4 vectorization
+        // Calculate dot product using global memory for weights with loop unrolling
         int j = 0;
-        int vectorized_limit = (input_size / 4) * 4;  // Round down to multiple of 4
         
-        for (; j < vectorized_limit; j += 4) {
-            // Load four inputs at once
-            float4 input_quad;
-            input_quad.x = input[j];
-            input_quad.y = input[j+1];
-            input_quad.z = input[j+2];
-            input_quad.w = input[j+3];
-            
-            // Load four weights at once
-            float4 weight_quad;
-            weight_quad.x = weights[j * hidden_size + weight_offset];
-            weight_quad.y = weights[(j+1) * hidden_size + weight_offset];
-            weight_quad.z = weights[(j+2) * hidden_size + weight_offset];
-            weight_quad.w = weights[(j+3) * hidden_size + weight_offset];
-            
-            // Compute products and accumulate
-            sum += input_quad.x * weight_quad.x;
-            sum += input_quad.y * weight_quad.y;
-            sum += input_quad.z * weight_quad.z;
-            sum += input_quad.w * weight_quad.w;
+        // Main loop with compiler-directed unrolling
+        #pragma unroll 4
+        for (j = 0; j < (input_size / 4) * 4; j += 4) {
+            sum += input[j] * weights[j * hidden_size + hidden_idx];
+            sum += input[j+1] * weights[(j+1) * hidden_size + hidden_idx];
+            sum += input[j+2] * weights[(j+2) * hidden_size + hidden_idx];
+            sum += input[j+3] * weights[(j+3) * hidden_size + hidden_idx];
         }
         
         // Handle remaining elements
         for (; j < input_size; j++) {
-            sum += input[j] * weights[j * hidden_size + weight_offset];
+            sum += input[j] * weights[j * hidden_size + hidden_idx];
         }
         
         // Apply ReLU activation and store result
@@ -430,63 +458,6 @@ __global__ void calculate_hidden_delta_kernel(
 
 // ────────── Weight update kernels ──────────
 
-// Kernel to update weights and biases for hidden layer
-__global__ void update_input_hidden_weights_kernel(
-    const float* __restrict__ batch_input,
-    const float* __restrict__ batch_hidden_delta,
-    float* __restrict__ weights,
-    float* __restrict__ bias,
-    int input_size,
-    int hidden_size,
-    int batch_size,
-    float learning_rate
-) {
-    extern __shared__ float shared_mem[];
-    float* s_gradient_accumulator = shared_mem;
-    float* s_bias_gradient = shared_mem + blockDim.x;
-    
-    int tid = threadIdx.x;
-    int global_tid = blockIdx.x * blockDim.x + tid;
-    
-    // Initialize gradient accumulator in shared memory
-    s_gradient_accumulator[tid] = 0.0f;
-    
-    // Threads handling hidden neuron biases also initialize bias gradient
-    if (tid < hidden_size) {
-        s_bias_gradient[tid] = 0.0f;
-    }
-    
-    __syncthreads();
-    
-    if (global_tid < input_size * hidden_size) {
-        int input_idx = global_tid / hidden_size;
-        int hidden_idx = global_tid % hidden_size;
-        
-        // Accumulate gradients across batch directly into shared memory
-        for (int batch_idx = 0; batch_idx < batch_size; batch_idx++) {
-            float input_val = batch_input[batch_idx * input_size + input_idx];
-            float hidden_delta = batch_hidden_delta[batch_idx * hidden_size + hidden_idx];
-            s_gradient_accumulator[tid] += input_val * hidden_delta;
-            
-            // For threads handling hidden neurons, also accumulate bias gradients
-            if (input_idx == 0 && hidden_idx < hidden_size) {
-                s_bias_gradient[hidden_idx] += hidden_delta;
-            }
-        }
-        
-        __syncthreads();
-        
-        // Apply gradient using learning rate
-        weights[input_idx * hidden_size + hidden_idx] -= learning_rate * s_gradient_accumulator[tid] / batch_size;
-    }
-    
-    // Update bias for hidden layer (one thread per hidden neuron)
-    if (tid < hidden_size && global_tid < input_size * hidden_size) {
-        // Apply bias gradient
-        bias[tid] -= learning_rate * s_bias_gradient[tid] / batch_size;
-    }
-}
-
 // Vectorized kernel using float4 for input-hidden weight updates
 __global__ void update_input_hidden_weights_kernel_vectorized4(
     const float* __restrict__ batch_input,
@@ -688,178 +659,6 @@ __global__ void count_correct_predictions_kernel(
     }
 }
 
-// ────────── CUDA Graph structures and setup ──────────
-#ifdef USE_CUDA_GRAPH
-typedef struct {
-    // Graph objects
-    cudaGraph_t graph;
-    cudaGraphExec_t instance;
-    
-    // Whether graph has been created
-    bool initialized;
-    
-    // Batch size used for graph creation
-    int captured_batch_size;
-    float captured_learning_rate;
-    
-    // Parameters needed for operation
-    int input_size;
-    int hidden_size;
-    int output_size;
-} GraphData;
-
-// Global graph data
-static GraphData graph_data = {0};
-
-// Function to clean up graph resources
-void cleanup_graph_resources() {
-    if (graph_data.initialized) {
-        if (graph_data.instance) {
-            cudaGraphExecDestroy(graph_data.instance);
-            graph_data.instance = NULL;
-        }
-        if (graph_data.graph) {
-            cudaGraphDestroy(graph_data.graph);
-            graph_data.graph = NULL;
-        }
-        graph_data.initialized = false;
-    }
-}
-
-// Function to clean up CUDA resources
-void cleanup_cuda_resources(cudaGraph_t graph, cudaGraphExec_t instance) {
-    if (instance) {
-        cudaGraphExecDestroy(instance);
-    }
-    if (graph) {
-        cudaGraphDestroy(graph);
-    }
-}
-
-// Function to create and initialize a CUDA graph for training
-cudaError_t create_training_graph(
-    int batch_size,
-    float learning_rate
-) {
-    // Initialize all variables at the beginning
-    cudaGraph_t tempGraph = NULL;
-    cudaGraphExec_t tempInstance = NULL;
-    cudaGraphNode_t errorNode = NULL;
-
-    // Calculate grid dimensions for kernels
-    int total_hidden_neurons = batch_size * HIDDEN_NODES;
-    int hidden_blocks = (total_hidden_neurons + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    hidden_blocks = hidden_blocks > MAX_BLOCKS ? MAX_BLOCKS : hidden_blocks;
-    
-    int total_output_neurons = batch_size * OUTPUT_NODES;
-    int output_blocks = (total_output_neurons + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    output_blocks = output_blocks > MAX_BLOCKS ? MAX_BLOCKS : output_blocks;
-    
-    int prediction_blocks = (batch_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    
-    int input_hidden_blocks = (INPUT_NODES * HIDDEN_NODES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    input_hidden_blocks = input_hidden_blocks > MAX_BLOCKS ? MAX_BLOCKS : input_hidden_blocks;
-    
-    int hidden_output_blocks = (HIDDEN_NODES * OUTPUT_NODES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    hidden_output_blocks = hidden_output_blocks > MAX_BLOCKS ? MAX_BLOCKS : hidden_output_blocks;
-
-    // Use non-goto error checking for graph creation
-    cudaError_t status;
-    
-    // Begin capturing
-    status = cudaStreamBeginCapture(cuda_stream, cudaStreamCaptureModeGlobal);
-    if (status != cudaSuccess) {
-        fprintf(stderr, "Begin stream capture failed: %s\n", cudaGetErrorString(status));
-        return status;
-    }
-    
-    // Reset correct count
-    status = cudaMemsetAsync(d_correct_count, 0, sizeof(int), cuda_stream);
-    if (status != cudaSuccess) {
-        fprintf(stderr, "Reset correct count failed: %s\n", cudaGetErrorString(status));
-        status = cudaStreamEndCapture(cuda_stream, &tempGraph);
-        return cudaErrorUnknown;
-    }
-    
-    // Forward pass - hidden layer (using vectorized4 version)
-    hidden_layer_kernel_batch_vectorized4<<<hidden_blocks, THREADS_PER_BLOCK, HIDDEN_NODES * sizeof(float), cuda_stream>>>(
-        d_batch_input, d_weight1, d_bias1, d_batch_hidden, 
-        INPUT_NODES, HIDDEN_NODES, batch_size
-    );
-    
-    // Forward pass - output layer
-    output_layer_kernel_batch<<<output_blocks, THREADS_PER_BLOCK, OUTPUT_NODES * sizeof(float), cuda_stream>>>(
-        d_batch_hidden, d_weight2, d_bias2, d_batch_output, 
-        HIDDEN_NODES, OUTPUT_NODES, batch_size
-    );
-    
-    // Count correct predictions
-    count_correct_predictions_kernel<<<prediction_blocks, THREADS_PER_BLOCK, 0, cuda_stream>>>(
-        d_batch_output, d_batch_targets, d_correct_count, 
-        OUTPUT_NODES, batch_size
-    );
-    
-    // Backward pass - output layer deltas
-    calculate_output_delta_kernel<<<output_blocks, THREADS_PER_BLOCK, 2 * THREADS_PER_BLOCK * sizeof(float), cuda_stream>>>(
-        d_batch_output, d_batch_targets, d_batch_output_delta, 
-        OUTPUT_NODES, batch_size
-    );
-    
-    // Backward pass - hidden layer deltas
-    calculate_hidden_delta_kernel<<<hidden_blocks, THREADS_PER_BLOCK, 
-        (THREADS_PER_BLOCK + THREADS_PER_BLOCK * OUTPUT_NODES + OUTPUT_NODES) * sizeof(float), cuda_stream>>>(
-        d_batch_hidden, d_batch_output_delta, d_weight2, d_batch_hidden_delta, 
-        HIDDEN_NODES, OUTPUT_NODES, batch_size
-    );
-    
-    // Weight updates - input to hidden (using vectorized4 version)
-    update_input_hidden_weights_kernel_vectorized4<<<input_hidden_blocks, THREADS_PER_BLOCK, 
-        HIDDEN_NODES * sizeof(float), cuda_stream>>>(
-        d_batch_input, d_batch_hidden_delta, d_weight1, d_bias1,
-        INPUT_NODES, HIDDEN_NODES, batch_size, learning_rate
-    );
-    
-    // Weight updates - hidden to output
-    update_hidden_output_weights_kernel<<<hidden_output_blocks, THREADS_PER_BLOCK, 
-        (THREADS_PER_BLOCK + OUTPUT_NODES) * sizeof(float), cuda_stream>>>(
-        d_batch_hidden, d_batch_output_delta, d_weight2, d_bias2,
-        HIDDEN_NODES, OUTPUT_NODES, batch_size, learning_rate
-    );
-    
-    // End capturing
-    status = cudaStreamEndCapture(cuda_stream, &tempGraph);
-    if (status != cudaSuccess) {
-        fprintf(stderr, "End stream capture failed: %s\n", cudaGetErrorString(status));
-        return status;
-    }
-    
-    // Create executable graph
-    status = cudaGraphInstantiate(&tempInstance, tempGraph, &errorNode, NULL, 0);
-    if (status != cudaSuccess) {
-        fprintf(stderr, "Instantiate graph failed: %s\n", cudaGetErrorString(status));
-        cleanup_cuda_resources(tempGraph, NULL);
-        return status;
-    }
-    
-    // Cleanup any existing graph
-    cleanup_graph_resources();
-    
-    // Store the new graph
-    graph_data.graph = tempGraph;
-    graph_data.instance = tempInstance;
-    graph_data.captured_batch_size = batch_size;
-    graph_data.captured_learning_rate = learning_rate;
-    graph_data.input_size = INPUT_NODES;
-    graph_data.hidden_size = HIDDEN_NODES;
-    graph_data.output_size = OUTPUT_NODES;
-    
-    // Mark graph as initialized
-    graph_data.initialized = true;
-    
-    return cudaSuccess;
-}
-#endif
-
 // ────────── Initialization and cleanup functions ──────────
 
 // Initialize the CUDA training environment
@@ -876,7 +675,6 @@ cudaError_t init_fused_training(int max_batch_size) {
     cudaError_t cudaStatus;
     
     // Create stream
-    // CUDA_CHECK(cudaStreamCreate(&cuda_stream), "Create CUDA stream");
     cudaStreamCreate(&cuda_stream);
     
     // Allocate device memory with capacity for the maximum batch size
@@ -920,11 +718,6 @@ Error:
 // Cleanup all CUDA resources
 extern "C"
 void cleanup_fused_training() {
-    // Clean up graph
-    #ifdef USE_CUDA_GRAPH
-    cleanup_graph_resources();
-    #endif
-    
     // Free device memory
     if (d_batch_input) cudaFree(d_batch_input);
     if (d_batch_hidden) cudaFree(d_batch_hidden);
@@ -994,20 +787,29 @@ void train_batch_fused(
     // Host-side counter for correct predictions
     int host_correct_count = 0;
     
-    // Flag to indicate if we're using CUDA graph
-    bool using_graph = false;
+    // Create CUDA events for kernel timing - declare at the beginning to fix control flow issues
+    cudaEvent_t kernel_start = NULL;
+    cudaEvent_t kernel_stop = NULL;
+    float kernel_time = 0.0f;
+    
+    // Grid dimensions for kernels - declare at the beginning
+    int total_hidden_neurons = 0;
+    int hidden_blocks = 0;
+    int total_output_neurons = 0;
+    int output_blocks = 0;
+    int prediction_blocks = 0;
+    int input_hidden_blocks = 0;
+    int hidden_output_blocks = 0;
     
     // Ensure environment is initialized
     if (!is_initialized || batch_size > current_max_batch_size) {
         if (should_log) {
             printf("[FUSED] Initializing training environment with batch size %d\n", batch_size);
         }
-        // CUDA_CHECK(init_fused_training(batch_size), "Initialize fused training");
         init_fused_training(batch_size);
     }
     
     // Reset correct count
-    // CUDA_CHECK(cudaMemset(d_correct_count, 0, sizeof(int)), "Reset correct count");
     cudaMemset(d_correct_count, 0, sizeof(int));
     
     if (should_log) {
@@ -1028,225 +830,180 @@ void train_batch_fused(
     CUDA_CHECK(cudaMemcpy(d_weight2, weight2, weight2_size, cudaMemcpyHostToDevice), "cudaMemcpy for weight2");
     CUDA_CHECK(cudaMemcpy(d_bias1, bias1, bias1_size, cudaMemcpyHostToDevice), "cudaMemcpy for bias1");
     CUDA_CHECK(cudaMemcpy(d_bias2, bias2, bias2_size, cudaMemcpyHostToDevice), "cudaMemcpy for bias2");
-    
-#ifdef USE_CUDA_GRAPH
-    // Check if we can use CUDA graph
-    if (graph_data.initialized && 
-        batch_size == graph_data.captured_batch_size && 
-        learning_rate == graph_data.captured_learning_rate) {
-        
-        // We can reuse the existing graph
-        if (should_log) {
-            printf("[FUSED] Executing existing CUDA graph...\n");
-        }
-        
-        CUDA_CHECK(cudaGraphLaunch(graph_data.instance, cuda_stream), "Launch graph");
-        CUDA_CHECK(cudaStreamSynchronize(cuda_stream), "Stream synchronize after graph launch");
-        
-        using_graph = true;
-    } else {
-        // Need to create a new graph for this batch size/learning rate
-        if (should_log) {
-            printf("[FUSED] Creating new CUDA graph for batch size %d and learning rate %.5f\n", 
-                  batch_size, learning_rate);
-        }
-        
-        // Create a new graph
-        cudaStatus = create_training_graph(batch_size, learning_rate);
-            
-        if (cudaStatus == cudaSuccess) {
-            // Execute the graph
-            CUDA_CHECK(cudaGraphLaunch(graph_data.instance, cuda_stream), "Launch graph");
-            CUDA_CHECK(cudaStreamSynchronize(cuda_stream), "Stream synchronize after graph launch");
-            
-            using_graph = true;
-        } else {
-            // Fall back to regular execution
-            cleanup_graph_resources();
-            if (should_log) {
-                printf("[FUSED] Falling back to regular execution...\n");
-            }
-        }
-    }
-#endif
 
-    // If not using graph, execute operations normally
-    if (!using_graph) {
-        // Create CUDA events for kernel timing
-        cudaEvent_t kernel_start, kernel_stop;
-        float kernel_time;
-        CUDA_CHECK(cudaEventCreate(&kernel_start), "Create kernel start event");
-        CUDA_CHECK(cudaEventCreate(&kernel_stop), "Create kernel stop event");
+    // Execute operations with CUDA streams
+    // Create CUDA events for kernel timing
+    CUDA_CHECK(cudaEventCreate(&kernel_start), "Create kernel start event");
+    CUDA_CHECK(cudaEventCreate(&kernel_stop), "Create kernel stop event");
+    
+    // ────────── Forward Pass ──────────
+    if (should_log) {
+        printf("[FUSED] Performing forward pass...\n");
+    }
+    
+    // Calculate grid dimensions for hidden layer
+    total_hidden_neurons = batch_size * HIDDEN_NODES;
+    hidden_blocks = (total_hidden_neurons + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    hidden_blocks = hidden_blocks > MAX_BLOCKS ? MAX_BLOCKS : hidden_blocks;
+    
+    // Time hidden layer kernel
+    CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record hidden layer start event");
+    
+    // Launch hidden layer kernel
+    hidden_layer_kernel_batch_tiled<<<hidden_blocks, THREADS_PER_BLOCK, HIDDEN_NODES * sizeof(float), cuda_stream>>>(
+        d_batch_input, d_weight1, d_bias1, d_batch_hidden, 
+        INPUT_NODES, HIDDEN_NODES, batch_size
+    );
+    
+    CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record hidden layer stop event");
+    CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize hidden layer stop event");
+    CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate hidden layer time");
+    if (should_log) printf("[TIMING] Hidden layer kernel: %.4f ms\n", kernel_time);
+    
+    // Check for kernel launch errors
+    CUDA_CHECK(cudaGetLastError(), "hidden_layer_kernel_batch_tiled launch");
+    
+    // Calculate grid dimensions for output layer
+    total_output_neurons = batch_size * OUTPUT_NODES;
+    output_blocks = (total_output_neurons + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    output_blocks = output_blocks > MAX_BLOCKS ? MAX_BLOCKS : output_blocks;
+    
+    // Time output layer kernel
+    CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record output layer start event");
+    
+    // Launch output layer kernel
+    output_layer_kernel_batch<<<output_blocks, THREADS_PER_BLOCK, OUTPUT_NODES * sizeof(float), cuda_stream>>>(
+        d_batch_hidden, d_weight2, d_bias2, d_batch_output, 
+        HIDDEN_NODES, OUTPUT_NODES, batch_size
+    );
+    
+    CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record output layer stop event");
+    CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize output layer stop event");
+    CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate output layer time");
+    if (should_log) printf("[TIMING] Output layer kernel: %.4f ms\n", kernel_time);
+    
+    // Check for kernel launch errors
+    CUDA_CHECK(cudaGetLastError(), "output_layer_kernel_batch launch");
+    
+    // ────────── Count Correct Predictions ──────────
+    if (should_log) {
+        printf("[FUSED] Counting correct predictions...\n");
+    }
+    
+    // Time prediction kernel
+    CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record prediction start event");
+    
+    // Launch kernel to count correct predictions
+    prediction_blocks = (batch_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    count_correct_predictions_kernel<<<prediction_blocks, THREADS_PER_BLOCK, 0, cuda_stream>>>(
+        d_batch_output, d_batch_targets, d_correct_count, 
+        OUTPUT_NODES, batch_size
+    );
+    
+    CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record prediction stop event");
+    CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize prediction stop event");
+    CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate prediction time");
+    if (should_log) printf("[TIMING] Count predictions kernel: %.4f ms\n", kernel_time);
+    
+    // Check for kernel launch errors
+    CUDA_CHECK(cudaGetLastError(), "count_correct_predictions_kernel launch");
+    
+    // ────────── Backward Pass ──────────
+    if (should_log && learning_rate > 0.0f) {
+        printf("[FUSED] Performing backward pass...\n");
+    }
+    
+    // Only perform backward pass if we're training (learning_rate > 0)
+    if (learning_rate > 0.0f) {
+        // Time output delta kernel
+        CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record output delta start event");
         
-        // ────────── Forward Pass ──────────
-        if (should_log) {
-            printf("[FUSED] Performing forward pass...\n");
-        }
-        
-        // Calculate grid dimensions for hidden layer
-        int total_hidden_neurons = batch_size * HIDDEN_NODES;
-        int hidden_blocks = (total_hidden_neurons + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        hidden_blocks = hidden_blocks > MAX_BLOCKS ? MAX_BLOCKS : hidden_blocks;
-        
-        // Time hidden layer kernel
-        CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record hidden layer start event");
-        
-        // Launch hidden layer kernel (using vectorized4 version)
-        hidden_layer_kernel_batch_vectorized4<<<hidden_blocks, THREADS_PER_BLOCK, HIDDEN_NODES * sizeof(float), cuda_stream>>>(
-            d_batch_input, d_weight1, d_bias1, d_batch_hidden, 
-            INPUT_NODES, HIDDEN_NODES, batch_size
-        );
-        
-        CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record hidden layer stop event");
-        CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize hidden layer stop event");
-        CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate hidden layer time");
-        if (should_log) printf("[TIMING] Hidden layer kernel: %.4f ms\n", kernel_time);
-        
-        // Check for kernel launch errors
-        CUDA_CHECK(cudaGetLastError(), "hidden_layer_kernel_batch_vectorized4 launch");
-        
-        // Calculate grid dimensions for output layer
-        int total_output_neurons = batch_size * OUTPUT_NODES;
-        int output_blocks = (total_output_neurons + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        output_blocks = output_blocks > MAX_BLOCKS ? MAX_BLOCKS : output_blocks;
-        
-        // Time output layer kernel
-        CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record output layer start event");
-        
-        // Launch output layer kernel
-        output_layer_kernel_batch<<<output_blocks, THREADS_PER_BLOCK, OUTPUT_NODES * sizeof(float), cuda_stream>>>(
-            d_batch_hidden, d_weight2, d_bias2, d_batch_output, 
-            HIDDEN_NODES, OUTPUT_NODES, batch_size
-        );
-        
-        CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record output layer stop event");
-        CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize output layer stop event");
-        CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate output layer time");
-        if (should_log) printf("[TIMING] Output layer kernel: %.4f ms\n", kernel_time);
-        
-        // Check for kernel launch errors
-        CUDA_CHECK(cudaGetLastError(), "output_layer_kernel_batch launch");
-        
-        // ────────── Count Correct Predictions ──────────
-        if (should_log) {
-            printf("[FUSED] Counting correct predictions...\n");
-        }
-        
-        // Time prediction kernel
-        CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record prediction start event");
-        
-        // Launch kernel to count correct predictions
-        int prediction_blocks = (batch_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        count_correct_predictions_kernel<<<prediction_blocks, THREADS_PER_BLOCK, 0, cuda_stream>>>(
-            d_batch_output, d_batch_targets, d_correct_count, 
+        // Calculate output layer deltas
+        calculate_output_delta_kernel<<<output_blocks, THREADS_PER_BLOCK, 2 * THREADS_PER_BLOCK * sizeof(float), cuda_stream>>>(
+            d_batch_output, d_batch_targets, d_batch_output_delta, 
             OUTPUT_NODES, batch_size
         );
         
-        CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record prediction stop event");
-        CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize prediction stop event");
-        CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate prediction time");
-        if (should_log) printf("[TIMING] Count predictions kernel: %.4f ms\n", kernel_time);
+        CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record output delta stop event");
+        CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize output delta stop event");
+        CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate output delta time");
+        if (should_log) printf("[TIMING] Output delta kernel: %.4f ms\n", kernel_time);
         
         // Check for kernel launch errors
-        CUDA_CHECK(cudaGetLastError(), "count_correct_predictions_kernel launch");
+        CUDA_CHECK(cudaGetLastError(), "calculate_output_delta_kernel launch");
         
-        // ────────── Backward Pass ──────────
-        if (should_log && learning_rate > 0.0f) {
-            printf("[FUSED] Performing backward pass...\n");
+        // Time hidden delta kernel
+        CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record hidden delta start event");
+        
+        // Calculate hidden layer deltas
+        calculate_hidden_delta_kernel<<<hidden_blocks, THREADS_PER_BLOCK, 
+            (THREADS_PER_BLOCK + THREADS_PER_BLOCK * OUTPUT_NODES + OUTPUT_NODES) * sizeof(float), cuda_stream>>>(
+            d_batch_hidden, d_batch_output_delta, d_weight2, d_batch_hidden_delta, 
+            HIDDEN_NODES, OUTPUT_NODES, batch_size
+        );
+        
+        CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record hidden delta stop event");
+        CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize hidden delta stop event");
+        CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate hidden delta time");
+        if (should_log) printf("[TIMING] Hidden delta kernel: %.4f ms\n", kernel_time);
+        
+        // Check for kernel launch errors
+        CUDA_CHECK(cudaGetLastError(), "calculate_hidden_delta_kernel launch");
+        
+        // ────────── Update Weights ──────────
+        if (should_log) {
+            printf("[FUSED] Updating weights...\n");
         }
         
-        // Only perform backward pass if we're training (learning_rate > 0)
-        if (learning_rate > 0.0f) {
-            // Time output delta kernel
-            CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record output delta start event");
-            
-            // Calculate output layer deltas
-            calculate_output_delta_kernel<<<output_blocks, THREADS_PER_BLOCK, 2 * THREADS_PER_BLOCK * sizeof(float), cuda_stream>>>(
-                d_batch_output, d_batch_targets, d_batch_output_delta, 
-                OUTPUT_NODES, batch_size
-            );
-            
-            CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record output delta stop event");
-            CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize output delta stop event");
-            CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate output delta time");
-            if (should_log) printf("[TIMING] Output delta kernel: %.4f ms\n", kernel_time);
-            
-            // Check for kernel launch errors
-            CUDA_CHECK(cudaGetLastError(), "calculate_output_delta_kernel launch");
-            
-            // Time hidden delta kernel
-            CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record hidden delta start event");
-            
-            // Calculate hidden layer deltas
-            calculate_hidden_delta_kernel<<<hidden_blocks, THREADS_PER_BLOCK, 
-                (THREADS_PER_BLOCK + THREADS_PER_BLOCK * OUTPUT_NODES + OUTPUT_NODES) * sizeof(float), cuda_stream>>>(
-                d_batch_hidden, d_batch_output_delta, d_weight2, d_batch_hidden_delta, 
-                HIDDEN_NODES, OUTPUT_NODES, batch_size
-            );
-            
-            CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record hidden delta stop event");
-            CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize hidden delta stop event");
-            CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate hidden delta time");
-            if (should_log) printf("[TIMING] Hidden delta kernel: %.4f ms\n", kernel_time);
-            
-            // Check for kernel launch errors
-            CUDA_CHECK(cudaGetLastError(), "calculate_hidden_delta_kernel launch");
-            
-            // ────────── Update Weights ──────────
-            if (should_log) {
-                printf("[FUSED] Updating weights...\n");
-            }
-            
-            // Time input-hidden weight update kernel
-            CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record input-hidden weights start event");
-            
-            // Update input-hidden weights (using vectorized4 version)
-            int input_hidden_blocks = (INPUT_NODES * HIDDEN_NODES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-            input_hidden_blocks = input_hidden_blocks > MAX_BLOCKS ? MAX_BLOCKS : input_hidden_blocks;
-            
-            update_input_hidden_weights_kernel_vectorized4<<<input_hidden_blocks, THREADS_PER_BLOCK, 
-                HIDDEN_NODES * sizeof(float), cuda_stream>>>(
-                d_batch_input, d_batch_hidden_delta, d_weight1, d_bias1,
-                INPUT_NODES, HIDDEN_NODES, batch_size, learning_rate
-            );
-            
-            CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record input-hidden weights stop event");
-            CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize input-hidden weights stop event");
-            CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate input-hidden weights time");
-            if (should_log) printf("[TIMING] Input-hidden weights kernel: %.4f ms\n", kernel_time);
-            
-            // Check for kernel launch errors
-            CUDA_CHECK(cudaGetLastError(), "update_input_hidden_weights_kernel_vectorized4 launch");
-            
-            // Time hidden-output weight update kernel
-            CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record hidden-output weights start event");
-            
-            // Update hidden-output weights
-            int hidden_output_blocks = (HIDDEN_NODES * OUTPUT_NODES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-            hidden_output_blocks = hidden_output_blocks > MAX_BLOCKS ? MAX_BLOCKS : hidden_output_blocks;
-            
-            update_hidden_output_weights_kernel<<<hidden_output_blocks, THREADS_PER_BLOCK, 
-                (THREADS_PER_BLOCK + OUTPUT_NODES) * sizeof(float), cuda_stream>>>(
-                d_batch_hidden, d_batch_output_delta, d_weight2, d_bias2,
-                HIDDEN_NODES, OUTPUT_NODES, batch_size, learning_rate
-            );
-            
-            CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record hidden-output weights stop event");
-            CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize hidden-output weights stop event");
-            CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate hidden-output weights time");
-            if (should_log) printf("[TIMING] Hidden-output weights kernel: %.4f ms\n", kernel_time);
-            
-            // Check for kernel launch errors
-            CUDA_CHECK(cudaGetLastError(), "update_hidden_output_weights_kernel launch");
-        }
+        // Time input-hidden weight update kernel
+        CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record input-hidden weights start event");
         
-        // Synchronize to ensure all operations are complete
-        CUDA_CHECK(cudaStreamSynchronize(cuda_stream), "Stream synchronize after all kernels");
+        // Update input-hidden weights (using vectorized4 version)
+        input_hidden_blocks = (INPUT_NODES * HIDDEN_NODES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+        input_hidden_blocks = input_hidden_blocks > MAX_BLOCKS ? MAX_BLOCKS : input_hidden_blocks;
         
-        // Cleanup timing events
-        cudaEventDestroy(kernel_start);
-        cudaEventDestroy(kernel_stop);
+        update_input_hidden_weights_kernel_vectorized4<<<input_hidden_blocks, THREADS_PER_BLOCK, 
+            HIDDEN_NODES * sizeof(float), cuda_stream>>>(
+            d_batch_input, d_batch_hidden_delta, d_weight1, d_bias1,
+            INPUT_NODES, HIDDEN_NODES, batch_size, learning_rate
+        );
+        
+        CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record input-hidden weights stop event");
+        CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize input-hidden weights stop event");
+        CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate input-hidden weights time");
+        if (should_log) printf("[TIMING] Input-hidden weights kernel: %.4f ms\n", kernel_time);
+        
+        // Check for kernel launch errors
+        CUDA_CHECK(cudaGetLastError(), "update_input_hidden_weights_kernel_vectorized4 launch");
+        
+        // Time hidden-output weight update kernel
+        CUDA_CHECK(cudaEventRecord(kernel_start, cuda_stream), "Record hidden-output weights start event");
+        
+        // Update hidden-output weights
+        hidden_output_blocks = (HIDDEN_NODES * OUTPUT_NODES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+        hidden_output_blocks = hidden_output_blocks > MAX_BLOCKS ? MAX_BLOCKS : hidden_output_blocks;
+        
+        update_hidden_output_weights_kernel<<<hidden_output_blocks, THREADS_PER_BLOCK, 
+            (THREADS_PER_BLOCK + OUTPUT_NODES) * sizeof(float), cuda_stream>>>(
+            d_batch_hidden, d_batch_output_delta, d_weight2, d_bias2,
+            HIDDEN_NODES, OUTPUT_NODES, batch_size, learning_rate
+        );
+        
+        CUDA_CHECK(cudaEventRecord(kernel_stop, cuda_stream), "Record hidden-output weights stop event");
+        CUDA_CHECK(cudaEventSynchronize(kernel_stop), "Synchronize hidden-output weights stop event");
+        CUDA_CHECK(cudaEventElapsedTime(&kernel_time, kernel_start, kernel_stop), "Calculate hidden-output weights time");
+        if (should_log) printf("[TIMING] Hidden-output weights kernel: %.4f ms\n", kernel_time);
+        
+        // Check for kernel launch errors
+        CUDA_CHECK(cudaGetLastError(), "update_hidden_output_weights_kernel launch");
     }
+    
+    // Synchronize to ensure all operations are complete
+    CUDA_CHECK(cudaStreamSynchronize(cuda_stream), "Stream synchronize after all kernels");
+    
+    // Cleanup timing events
+    cudaEventDestroy(kernel_start);
+    cudaEventDestroy(kernel_stop);
     
     // Copy correct count back to host
     CUDA_CHECK(cudaMemcpy(&host_correct_count, d_correct_count, sizeof(int), cudaMemcpyDeviceToHost), 
