@@ -1,0 +1,359 @@
+[0;32mCompiling benchmark 'hidden_layer_kernel_batch'...[0m
+[0;32mCompilation successful[0m
+[0;32mRunning benchmark 'hidden_layer_kernel_batch'...[0m
+
+Verifying correctness with batch size 32...
+Correctness Results:
+  Optimized kernel: PASS
+  Advanced kernel: PASS
+  Tiled kernel: PASS
+  Warp kernel: FAIL - max diff: 3.014859e+01 at index 574 (batch=4, neuron=62)
+    Values at failure point: original=13.439476, Warp=43.588061
+ERROR: One or more optimized kernels produce incorrect results.
+Continuing with benchmarks, but results may not be accurate.
+
+===== BENCHMARKING KERNEL TYPE 0 =====
+
+Benchmarking original kernel with batch size 32...
+Results for original kernel with batch size 32:
+  Average time: 0.1866 ms
+  Min time:     0.1850 ms
+  Max time:     0.1881 ms
+  Std dev:      0.0005 ms
+  Performance metrics:
+    Throughput:        171462.45 images/sec
+    Computational:     34.41 GFLOPS
+    Memory bandwidth:  5.56 GB/s
+
+Benchmarking original kernel with batch size 64...
+Results for original kernel with batch size 64:
+  Average time: 0.1868 ms
+  Min time:     0.1853 ms
+  Max time:     0.1884 ms
+  Std dev:      0.0006 ms
+  Performance metrics:
+    Throughput:        342540.31 images/sec
+    Computational:     68.75 GFLOPS
+    Memory bandwidth:  6.80 GB/s
+
+Benchmarking original kernel with batch size 128...
+Results for original kernel with batch size 128:
+  Average time: 0.3305 ms
+  Min time:     0.3011 ms
+  Max time:     0.3656 ms
+  Std dev:      0.0301 ms
+  Performance metrics:
+    Throughput:        387314.97 images/sec
+    Computational:     77.74 GFLOPS
+    Memory bandwidth:  5.26 GB/s
+
+Benchmarking original kernel with batch size 256...
+Results for original kernel with batch size 256:
+  Average time: 0.6015 ms
+  Min time:     0.6001 ms
+  Max time:     0.6033 ms
+  Std dev:      0.0007 ms
+  Performance metrics:
+    Throughput:        425597.53 images/sec
+    Computational:     85.42 GFLOPS
+    Memory bandwidth:  4.44 GB/s
+
+Benchmarking original kernel with batch size 512...
+Results for original kernel with batch size 512:
+  Average time: 0.9521 ms
+  Min time:     0.5062 ms
+  Max time:     1.0528 ms
+  Std dev:      0.2011 ms
+  Performance metrics:
+    Throughput:        537734.06 images/sec
+    Computational:     107.93 GFLOPS
+    Memory bandwidth:  4.77 GB/s
+
+Benchmarking original kernel with batch size 1024...
+Results for original kernel with batch size 1024:
+  Average time: 0.9838 ms
+  Min time:     0.8950 ms
+  Max time:     1.0401 ms
+  Std dev:      0.0615 ms
+  Performance metrics:
+    Throughput:        1040826.44 images/sec
+    Computational:     208.90 GFLOPS
+    Memory bandwidth:  8.41 GB/s
+
+===== BENCHMARKING KERNEL TYPE 1 =====
+
+Benchmarking loop-unrolled kernel with batch size 32...
+Results for loop-unrolled kernel with batch size 32:
+  Average time: 0.0875 ms
+  Min time:     0.0822 ms
+  Max time:     0.0908 ms
+  Std dev:      0.0027 ms
+  Performance metrics:
+    Throughput:        365750.94 images/sec
+    Computational:     73.41 GFLOPS
+    Memory bandwidth:  11.86 GB/s
+
+Benchmarking loop-unrolled kernel with batch size 64...
+Results for loop-unrolled kernel with batch size 64:
+  Average time: 0.0848 ms
+  Min time:     0.0837 ms
+  Max time:     0.0944 ms
+  Std dev:      0.0011 ms
+  Performance metrics:
+    Throughput:        755104.31 images/sec
+    Computational:     151.55 GFLOPS
+    Memory bandwidth:  14.99 GB/s
+
+Benchmarking loop-unrolled kernel with batch size 128...
+Results for loop-unrolled kernel with batch size 128:
+  Average time: 0.1450 ms
+  Min time:     0.1434 ms
+  Max time:     0.1553 ms
+  Std dev:      0.0012 ms
+  Performance metrics:
+    Throughput:        882558.00 images/sec
+    Computational:     177.13 GFLOPS
+    Memory bandwidth:  11.98 GB/s
+
+Benchmarking loop-unrolled kernel with batch size 256...
+Results for loop-unrolled kernel with batch size 256:
+  Average time: 0.2758 ms
+  Min time:     0.2732 ms
+  Max time:     0.2785 ms
+  Std dev:      0.0012 ms
+  Performance metrics:
+    Throughput:        928111.00 images/sec
+    Computational:     186.28 GFLOPS
+    Memory bandwidth:  9.69 GB/s
+
+Benchmarking loop-unrolled kernel with batch size 512...
+Results for loop-unrolled kernel with batch size 512:
+  Average time: 0.4913 ms
+  Min time:     0.4755 ms
+  Max time:     0.5181 ms
+  Std dev:      0.0185 ms
+  Performance metrics:
+    Throughput:        1042121.81 images/sec
+    Computational:     209.16 GFLOPS
+    Memory bandwidth:  9.24 GB/s
+
+Benchmarking loop-unrolled kernel with batch size 1024...
+Results for loop-unrolled kernel with batch size 1024:
+  Average time: 0.9902 ms
+  Min time:     0.9296 ms
+  Max time:     1.0244 ms
+  Std dev:      0.0362 ms
+  Performance metrics:
+    Throughput:        1034130.88 images/sec
+    Computational:     207.55 GFLOPS
+    Memory bandwidth:  8.36 GB/s
+
+===== BENCHMARKING KERNEL TYPE 2 =====
+
+Benchmarking advanced-optimized kernel with batch size 32...
+Results for advanced-optimized kernel with batch size 32:
+  Average time: 0.0938 ms
+  Min time:     0.0926 ms
+  Max time:     0.0963 ms
+  Std dev:      0.0006 ms
+  Performance metrics:
+    Throughput:        340973.47 images/sec
+    Computational:     68.43 GFLOPS
+    Memory bandwidth:  11.05 GB/s
+
+Benchmarking advanced-optimized kernel with batch size 64...
+Results for advanced-optimized kernel with batch size 64:
+  Average time: 0.0875 ms
+  Min time:     0.0860 ms
+  Max time:     0.0891 ms
+  Std dev:      0.0006 ms
+  Performance metrics:
+    Throughput:        731026.19 images/sec
+    Computational:     146.72 GFLOPS
+    Memory bandwidth:  14.52 GB/s
+
+Benchmarking advanced-optimized kernel with batch size 128...
+Results for advanced-optimized kernel with batch size 128:
+  Average time: 0.1413 ms
+  Min time:     0.1395 ms
+  Max time:     0.1474 ms
+  Std dev:      0.0013 ms
+  Performance metrics:
+    Throughput:        905813.50 images/sec
+    Computational:     181.80 GFLOPS
+    Memory bandwidth:  12.30 GB/s
+
+Benchmarking advanced-optimized kernel with batch size 256...
+Results for advanced-optimized kernel with batch size 256:
+  Average time: 0.2747 ms
+  Min time:     0.2714 ms
+  Max time:     0.2765 ms
+  Std dev:      0.0013 ms
+  Performance metrics:
+    Throughput:        931908.81 images/sec
+    Computational:     187.04 GFLOPS
+    Memory bandwidth:  9.73 GB/s
+
+Benchmarking advanced-optimized kernel with batch size 512...
+Results for advanced-optimized kernel with batch size 512:
+  Average time: 0.4917 ms
+  Min time:     0.4728 ms
+  Max time:     0.5201 ms
+  Std dev:      0.0171 ms
+  Performance metrics:
+    Throughput:        1041279.50 images/sec
+    Computational:     208.99 GFLOPS
+    Memory bandwidth:  9.23 GB/s
+
+Benchmarking advanced-optimized kernel with batch size 1024...
+Results for advanced-optimized kernel with batch size 1024:
+  Average time: 0.9694 ms
+  Min time:     0.9016 ms
+  Max time:     1.0138 ms
+  Std dev:      0.0405 ms
+  Performance metrics:
+    Throughput:        1056339.88 images/sec
+    Computational:     212.01 GFLOPS
+    Memory bandwidth:  8.54 GB/s
+
+===== BENCHMARKING KERNEL TYPE 3 =====
+
+Benchmarking tiled kernel with batch size 32...
+Results for tiled kernel with batch size 32:
+  Average time: 0.0814 ms
+  Min time:     0.0800 ms
+  Max time:     0.0830 ms
+  Std dev:      0.0005 ms
+  Performance metrics:
+    Throughput:        393101.75 images/sec
+    Computational:     78.90 GFLOPS
+    Memory bandwidth:  12.74 GB/s
+
+Benchmarking tiled kernel with batch size 64...
+Results for tiled kernel with batch size 64:
+  Average time: 0.1450 ms
+  Min time:     0.1431 ms
+  Max time:     0.1462 ms
+  Std dev:      0.0005 ms
+  Performance metrics:
+    Throughput:        441311.28 images/sec
+    Computational:     88.57 GFLOPS
+    Memory bandwidth:  8.76 GB/s
+
+Benchmarking tiled kernel with batch size 128...
+Results for tiled kernel with batch size 128:
+  Average time: 0.2724 ms
+  Min time:     0.2683 ms
+  Max time:     0.2760 ms
+  Std dev:      0.0027 ms
+  Performance metrics:
+    Throughput:        469932.53 images/sec
+    Computational:     94.32 GFLOPS
+    Memory bandwidth:  6.38 GB/s
+
+Benchmarking tiled kernel with batch size 256...
+Results for tiled kernel with batch size 256:
+  Average time: 0.5283 ms
+  Min time:     0.5264 ms
+  Max time:     0.5303 ms
+  Std dev:      0.0006 ms
+  Performance metrics:
+    Throughput:        484565.25 images/sec
+    Computational:     97.25 GFLOPS
+    Memory bandwidth:  5.06 GB/s
+
+Benchmarking tiled kernel with batch size 512...
+Results for tiled kernel with batch size 512:
+  Average time: 1.1069 ms
+  Min time:     1.0977 ms
+  Max time:     1.1172 ms
+  Std dev:      0.0027 ms
+  Performance metrics:
+    Throughput:        462551.03 images/sec
+    Computational:     92.84 GFLOPS
+    Memory bandwidth:  4.10 GB/s
+
+Benchmarking tiled kernel with batch size 1024...
+Results for tiled kernel with batch size 1024:
+  Average time: 2.1924 ms
+  Min time:     2.1899 ms
+  Max time:     2.1955 ms
+  Std dev:      0.0010 ms
+  Performance metrics:
+    Throughput:        467061.19 images/sec
+    Computational:     93.74 GFLOPS
+    Memory bandwidth:  3.77 GB/s
+
+===== BENCHMARKING KERNEL TYPE 4 =====
+
+Benchmarking warp-cooperative kernel with batch size 32...
+Results for warp-cooperative kernel with batch size 32:
+  Average time: 0.2041 ms
+  Min time:     0.2028 ms
+  Max time:     0.2065 ms
+  Std dev:      0.0008 ms
+  Performance metrics:
+    Throughput:        156789.41 images/sec
+    Computational:     31.47 GFLOPS
+    Memory bandwidth:  5.08 GB/s
+
+Benchmarking warp-cooperative kernel with batch size 64...
+Results for warp-cooperative kernel with batch size 64:
+  Average time: 0.4079 ms
+  Min time:     0.4055 ms
+  Max time:     0.4099 ms
+  Std dev:      0.0012 ms
+  Performance metrics:
+    Throughput:        156911.91 images/sec
+    Computational:     31.49 GFLOPS
+    Memory bandwidth:  3.12 GB/s
+
+Benchmarking warp-cooperative kernel with batch size 128...
+Results for warp-cooperative kernel with batch size 128:
+  Average time: 0.7597 ms
+  Min time:     0.7266 ms
+  Max time:     0.7885 ms
+  Std dev:      0.0194 ms
+  Performance metrics:
+    Throughput:        168476.53 images/sec
+    Computational:     33.81 GFLOPS
+    Memory bandwidth:  2.29 GB/s
+
+Benchmarking warp-cooperative kernel with batch size 256...
+Results for warp-cooperative kernel with batch size 256:
+  Average time: 1.4353 ms
+  Min time:     1.3913 ms
+  Max time:     1.4558 ms
+  Std dev:      0.0230 ms
+  Performance metrics:
+    Throughput:        178355.39 images/sec
+    Computational:     35.80 GFLOPS
+    Memory bandwidth:  1.86 GB/s
+
+Benchmarking warp-cooperative kernel with batch size 512...
+Results for warp-cooperative kernel with batch size 512:
+  Average time: 2.8546 ms
+  Min time:     2.6928 ms
+  Max time:     2.9071 ms
+  Std dev:      0.0444 ms
+  Performance metrics:
+    Throughput:        179358.78 images/sec
+    Computational:     36.00 GFLOPS
+    Memory bandwidth:  1.59 GB/s
+
+Benchmarking warp-cooperative kernel with batch size 1024...
+Results for warp-cooperative kernel with batch size 1024:
+  Average time: 5.8108 ms
+  Min time:     5.7237 ms
+  Max time:     5.9206 ms
+  Std dev:      0.0427 ms
+  Performance metrics:
+    Throughput:        176222.58 images/sec
+    Computational:     35.37 GFLOPS
+    Memory bandwidth:  1.42 GB/s
+
+Benchmarking complete.
+
+Compile with: nvcc -O3 -arch=sm_XX --use_fast_math -lineinfo hidden_layer_kernel_batch.cu -o benchmark
+Run with profiling: nvprof --metrics achieved_occupancy,inst_executed,gld_throughput,gst_throughput,dram_read_throughput,dram_write_throughput,flop_count_dp ./benchmark
+[0;32mBenchmark completed successfully[0m

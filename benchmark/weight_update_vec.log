@@ -1,0 +1,232 @@
+[0;32mDetected GPU compute capability: sm_75[0m
+[0;32mCompiling benchmark 'update_weights_kernel_batch'...[0m
+[0;32mCompilation successful[0m
+[0;32mRunning benchmark 'update_weights_kernel_batch'...[0m
+
+===== BENCHMARKING KERNEL TYPE 0 =====
+
+Benchmarking original kernel with batch size 32...
+Results for original kernel with batch size 32:
+  Correctness: PASS
+  Average time: 0.1811 ms
+  Min time:     0.1500 ms
+  Max time:     0.2299 ms
+  Std dev:      0.0372 ms
+  Performance metrics:
+    Elements/sec: 17753.37 million
+    Memory bandwidth: 142.03 GB/s
+    Batch size: 32
+
+Benchmarking original kernel with batch size 64...
+Results for original kernel with batch size 64:
+  Correctness: PASS
+  Average time: 0.2577 ms
+  Min time:     0.2560 ms
+  Max time:     0.2613 ms
+  Std dev:      0.0008 ms
+  Performance metrics:
+    Elements/sec: 24956.84 million
+    Memory bandwidth: 199.65 GB/s
+    Batch size: 64
+
+Benchmarking original kernel with batch size 128...
+Results for original kernel with batch size 128:
+  Correctness: PASS
+  Average time: 0.4720 ms
+  Min time:     0.4699 ms
+  Max time:     0.4751 ms
+  Std dev:      0.0010 ms
+  Performance metrics:
+    Elements/sec: 27248.00 million
+    Memory bandwidth: 217.98 GB/s
+    Batch size: 128
+
+Benchmarking original kernel with batch size 256...
+Results for original kernel with batch size 256:
+  Correctness: PASS
+  Average time: 0.5943 ms
+  Min time:     0.5636 ms
+  Max time:     0.9031 ms
+  Std dev:      0.0886 ms
+  Performance metrics:
+    Elements/sec: 43284.03 million
+    Memory bandwidth: 346.27 GB/s
+    Batch size: 256
+
+Benchmarking original kernel with batch size 512...
+Results for original kernel with batch size 512:
+  Correctness: FAIL - Max weight diff: 0.000000e+00 at index -1, Max bias diff: 7.150300e-04 at index 93
+    Bias values at failure point: ref=-0.040537, test=-0.041252
+  Average time: 1.0568 ms
+  Min time:     0.9830 ms
+  Max time:     1.1084 ms
+  Std dev:      0.0490 ms
+  Performance metrics:
+    Elements/sec: 48682.21 million
+    Memory bandwidth: 389.46 GB/s
+    Batch size: 512
+
+Benchmarking original kernel with batch size 1024...
+Results for original kernel with batch size 1024:
+  Correctness: FAIL - Max weight diff: 0.000000e+00 at index -1, Max bias diff: 6.557090e-04 at index 127
+    Bias values at failure point: ref=0.628704, test=0.629360
+  Average time: 1.9298 ms
+  Min time:     1.9258 ms
+  Max time:     1.9478 ms
+  Std dev:      0.0042 ms
+  Performance metrics:
+    Elements/sec: 53318.47 million
+    Memory bandwidth: 426.55 GB/s
+    Batch size: 1024
+
+===== BENCHMARKING KERNEL TYPE 1 =====
+
+Benchmarking advanced kernel with batch size 32...
+Results for advanced kernel with batch size 32:
+  Correctness: PASS
+  Average time: 0.0754 ms
+  Min time:     0.0738 ms
+  Max time:     0.0770 ms
+  Std dev:      0.0007 ms
+  Performance metrics:
+    Elements/sec: 42660.14 million
+    Memory bandwidth: 341.28 GB/s
+    Batch size: 32
+
+Benchmarking advanced kernel with batch size 64...
+Results for advanced kernel with batch size 64:
+  Correctness: PASS
+  Average time: 0.1345 ms
+  Min time:     0.1331 ms
+  Max time:     0.1364 ms
+  Std dev:      0.0007 ms
+  Performance metrics:
+    Elements/sec: 47825.53 million
+    Memory bandwidth: 382.60 GB/s
+    Batch size: 64
+
+Benchmarking advanced kernel with batch size 128...
+Results for advanced kernel with batch size 128:
+  Correctness: PASS
+  Average time: 0.2528 ms
+  Min time:     0.2518 ms
+  Max time:     0.2541 ms
+  Std dev:      0.0007 ms
+  Performance metrics:
+    Elements/sec: 50884.40 million
+    Memory bandwidth: 407.08 GB/s
+    Batch size: 128
+
+Benchmarking advanced kernel with batch size 256...
+Results for advanced kernel with batch size 256:
+  Correctness: PASS
+  Average time: 0.4893 ms
+  Min time:     0.4874 ms
+  Max time:     0.4929 ms
+  Std dev:      0.0008 ms
+  Performance metrics:
+    Elements/sec: 52573.52 million
+    Memory bandwidth: 420.59 GB/s
+    Batch size: 256
+
+Benchmarking advanced kernel with batch size 512...
+Results for advanced kernel with batch size 512:
+  Correctness: PASS
+  Average time: 0.9629 ms
+  Min time:     0.9605 ms
+  Max time:     0.9655 ms
+  Std dev:      0.0010 ms
+  Performance metrics:
+    Elements/sec: 53430.20 million
+    Memory bandwidth: 427.44 GB/s
+    Batch size: 512
+
+Benchmarking advanced kernel with batch size 1024...
+Results for advanced kernel with batch size 1024:
+  Correctness: FAIL - Max weight diff: 0.000000e+00 at index -1, Max bias diff: 5.170539e-04 at index 111
+    Bias values at failure point: ref=-0.000942, test=-0.000425
+  Average time: 1.9071 ms
+  Min time:     1.9046 ms
+  Max time:     1.9111 ms
+  Std dev:      0.0013 ms
+  Performance metrics:
+    Elements/sec: 53951.54 million
+    Memory bandwidth: 431.61 GB/s
+    Batch size: 1024
+
+===== BENCHMARKING KERNEL TYPE 2 =====
+
+Benchmarking vectorized kernel with batch size 32...
+Results for vectorized kernel with batch size 32:
+  Correctness: PASS
+  Average time: 0.0436 ms
+  Min time:     0.0419 ms
+  Max time:     0.0467 ms
+  Std dev:      0.0007 ms
+  Performance metrics:
+    Elements/sec: 73802.02 million
+    Memory bandwidth: 590.42 GB/s
+    Batch size: 32
+
+Benchmarking vectorized kernel with batch size 64...
+Results for vectorized kernel with batch size 64:
+  Correctness: PASS
+  Average time: 0.0708 ms
+  Min time:     0.0696 ms
+  Max time:     0.0728 ms
+  Std dev:      0.0006 ms
+  Performance metrics:
+    Elements/sec: 90809.67 million
+    Memory bandwidth: 726.48 GB/s
+    Batch size: 64
+
+Benchmarking vectorized kernel with batch size 128...
+Results for vectorized kernel with batch size 128:
+  Correctness: PASS
+  Average time: 0.1255 ms
+  Min time:     0.1237 ms
+  Max time:     0.1303 ms
+  Std dev:      0.0009 ms
+  Performance metrics:
+    Elements/sec: 102462.91 million
+    Memory bandwidth: 819.70 GB/s
+    Batch size: 128
+
+Benchmarking vectorized kernel with batch size 256...
+Results for vectorized kernel with batch size 256:
+  Correctness: PASS
+  Average time: 0.2342 ms
+  Min time:     0.2323 ms
+  Max time:     0.2368 ms
+  Std dev:      0.0009 ms
+  Performance metrics:
+    Elements/sec: 109820.50 million
+    Memory bandwidth: 878.56 GB/s
+    Batch size: 256
+
+Benchmarking vectorized kernel with batch size 512...
+Results for vectorized kernel with batch size 512:
+  Correctness: PASS
+  Average time: 0.4555 ms
+  Min time:     0.4495 ms
+  Max time:     0.4715 ms
+  Std dev:      0.0050 ms
+  Performance metrics:
+    Elements/sec: 112948.43 million
+    Memory bandwidth: 903.59 GB/s
+    Batch size: 512
+
+Benchmarking vectorized kernel with batch size 1024...
+Results for vectorized kernel with batch size 1024:
+  Correctness: PASS
+  Average time: 0.9534 ms
+  Min time:     0.9011 ms
+  Max time:     0.9867 ms
+  Std dev:      0.0312 ms
+  Performance metrics:
+    Elements/sec: 107919.80 million
+    Memory bandwidth: 863.36 GB/s
+    Batch size: 1024
+
+Benchmarking complete.
+[0;32mBenchmark completed successfully[0m
