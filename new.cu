@@ -5,7 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include "utils.h"        // Include the fused header for batch processing
+#include "nn.h"          // Include the neural network header (replacing utils.h)
 #include "logging.h"      // Include logging utilities
 #include "omp.h"
 

@@ -1,3 +1,6 @@
 *main
 **/venv
 model.bin
+*.o
+*.x
+cuda_nn
